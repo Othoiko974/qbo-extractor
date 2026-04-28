@@ -697,6 +697,19 @@ export function buildSearchCandidates(
     if (seen.has(key)) return;
     seen.add(key);
     out.push(t);
+    // The budget often labels Home Depot / Rona receipts as "F-7124 00061
+    // 68264" while QBO stores the same txn under "7124 00061 68264"
+    // (the F- is a budget convention, not an Intuit field requirement).
+    // Push the bare variant alongside so the exact-match query lands
+    // whichever form QBO actually has.
+    if (/^F-/i.test(t)) {
+      const bare = t.replace(/^F-/i, '').trim();
+      const bareKey = bare.toLowerCase();
+      if (bare && !seen.has(bareKey)) {
+        seen.add(bareKey);
+        out.push(bare);
+      }
+    }
   };
 
   // Tokenize the comment first so trigger-based hits ("facture 440") can be
