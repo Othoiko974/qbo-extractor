@@ -326,7 +326,17 @@ function CandidateCard({
         title={t('resolver.open_qbo_txn')}
         onClick={(e) => {
           e.stopPropagation();
-          const url = `https://qbo.intuit.com/app/${candidate.txnType === 'Bill' ? 'bill' : 'expense'}?txnId=${encodeURIComponent(candidate.txnId)}`;
+          // Path map per txn type: Bill → /app/bill, Invoice → /app/invoice,
+          // Purchase → /app/expense. Without the Invoice branch we'd send
+          // the user to /app/expense?txnId=X which lands on a totally
+          // unrelated Dépense that happens to share the same id.
+          const path =
+            candidate.txnType === 'Bill'
+              ? 'bill'
+              : candidate.txnType === 'Invoice'
+                ? 'invoice'
+                : 'expense';
+          const url = `https://qbo.intuit.com/app/${path}?txnId=${encodeURIComponent(candidate.txnId)}`;
           void window.qboApi.openUrl(url);
         }}
         style={{ flexShrink: 0 }}
