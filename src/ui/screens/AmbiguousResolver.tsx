@@ -4,6 +4,7 @@ import { Icon, fmtCurrency } from '../Icon';
 import type { RunRowCandidate } from '../../types/domain';
 import { t, useLang } from '../../i18n';
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
+import { qboTxnUrl } from '../../shared/qbo-url';
 
 // Resolver screen — image 2 of the design handoff. Shown when the user
 // clicks "Choisir" on an ambiguous row in the Review screen. The candidates
@@ -261,6 +262,12 @@ function CandidateCard({
   selected: boolean;
   onSelect: () => void;
 }) {
+  // Pull the active company's realmId so the deep-link URL routes to the
+  // correct QBO company instead of whichever company the user's web
+  // session happens to be on.
+  const activeCompanyKey = useStore((s) => s.activeCompanyKey);
+  const companies = useStore((s) => s.companies);
+  const realmId = companies.find((c) => c.key === activeCompanyKey)?.qboRealmId;
   const typeChipClass =
     candidate.txnType === 'Bill'
       ? 'chip-info'
@@ -331,18 +338,7 @@ function CandidateCard({
         title={t('resolver.open_qbo_txn')}
         onClick={(e) => {
           e.stopPropagation();
-          // Path map per txn type: Bill → /app/bill, Invoice → /app/invoice,
-          // Purchase → /app/expense. Without the Invoice branch we'd send
-          // the user to /app/expense?txnId=X which lands on a totally
-          // unrelated Dépense that happens to share the same id.
-          const path =
-            candidate.txnType === 'Bill'
-              ? 'bill'
-              : candidate.txnType === 'Invoice'
-                ? 'invoice'
-                : 'expense';
-          const url = `https://qbo.intuit.com/app/${path}?txnId=${encodeURIComponent(candidate.txnId)}`;
-          void window.qboApi.openUrl(url);
+          void window.qboApi.openUrl(qboTxnUrl(candidate.txnId, candidate.txnType, realmId));
         }}
         style={{ flexShrink: 0 }}
       >

@@ -263,13 +263,15 @@ export class QboClient {
     // only lives on that Invoice. Stopping at the first non-empty table
     // would silently bypass the engine's vendor / amount / date tie-break.
     //
-    // Variant search: budgets often write Home Depot / Rona receipts as
-    // "F-7124 00061 68264" but QBO stores the Bill under "7124 00061 68264"
-    // — the F- is a budget convention, not an Intuit field. AND the same
-    // logical receipt sometimes has a Bill (supplier facture, bare number)
-    // AND an Invoice (re-billing imputation, with F- prefix). Querying
-    // both forms surfaces every txn that matters; dedup by (type, Id)
-    // guards against an overlap at the QBO side.
+    // Variant search via `WHERE DocNumber IN (…)`: budgets often write
+    // Home Depot / Rona receipts as "F-7124 00061 68264" but QBO stores
+    // the Bill under "7124 00061 68264" — the F- is a budget convention.
+    // Same logical receipt sometimes has a Bill (supplier facture, bare)
+    // AND an Invoice (re-billing imputation, with F-). Both variants go
+    // into one IN-clause per table so the call cost stays at 3 requests
+    // — splitting into 2 separate queries per variant + 3 tables drove
+    // the request count to 6 per candidate and tripped Intuit's
+    // 500/min/realm rate limit on real budgets.
     const variants = new Set<string>();
     variants.add(docNumber);
     if (/^F-/i.test(docNumber)) {
@@ -278,50 +280,36 @@ export class QboClient {
     } else if (/^[A-Za-z0-9]/.test(docNumber)) {
       variants.add(`F-${docNumber}`);
     }
+    const inClause = [...variants]
+      .map((v) => `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`)
+      .join(', ');
     const entities = ['Purchase', 'Bill', 'Invoice'] as const;
-    const queries: Promise<QboBill[]>[] = [];
-    for (const v of variants) {
-      const escaped = v.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-      for (const entity of entities) {
-        queries.push(
-          this.query<Record<string, unknown>>(
-            `SELECT * FROM ${entity} WHERE DocNumber = '${escaped}' MAXRESULTS 10`,
-          ).then((rows) =>
-            rows.map((r): QboBill => {
-              const vendorRef = r.VendorRef as { value: string; name?: string } | undefined;
-              const entityRef = r.EntityRef as { value: string; name?: string; type?: string } | undefined;
-              const customerRef = r.CustomerRef as { value: string; name?: string } | undefined;
-              const partyName =
-                entityRef?.name ?? vendorRef?.name ?? customerRef?.name;
-              return {
-                Id: String(r.Id),
-                DocNumber: r.DocNumber as string | undefined,
-                TxnDate: r.TxnDate as string | undefined,
-                TotalAmt: typeof r.TotalAmt === 'number' ? r.TotalAmt : Number(r.TotalAmt),
-                VendorRef: vendorRef,
-                EntityRef: entityRef,
-                CustomerRef: customerRef,
-                _type: entity,
-                _partyName: partyName,
-              };
-            }),
-          ),
+    const results = await Promise.all(
+      entities.map(async (entity) => {
+        const rows = await this.query<Record<string, unknown>>(
+          `SELECT * FROM ${entity} WHERE DocNumber IN (${inClause}) MAXRESULTS 10`,
         );
-      }
-    }
-    const results = await Promise.all(queries);
-    const seen = new Set<string>();
-    const out: QboBill[] = [];
-    for (const arr of results) {
-      for (const h of arr) {
-        const k = `${h._type}|${h.Id}`;
-        if (!seen.has(k)) {
-          seen.add(k);
-          out.push(h);
-        }
-      }
-    }
-    return out;
+        return rows.map((r): QboBill => {
+          const vendorRef = r.VendorRef as { value: string; name?: string } | undefined;
+          const entityRef = r.EntityRef as { value: string; name?: string; type?: string } | undefined;
+          const customerRef = r.CustomerRef as { value: string; name?: string } | undefined;
+          const partyName =
+            entityRef?.name ?? vendorRef?.name ?? customerRef?.name;
+          return {
+            Id: String(r.Id),
+            DocNumber: r.DocNumber as string | undefined,
+            TxnDate: r.TxnDate as string | undefined,
+            TotalAmt: typeof r.TotalAmt === 'number' ? r.TotalAmt : Number(r.TotalAmt),
+            VendorRef: vendorRef,
+            EntityRef: entityRef,
+            CustomerRef: customerRef,
+            _type: entity,
+            _partyName: partyName,
+          };
+        });
+      }),
+    );
+    return results.flat();
   }
 
   async getAttachables(txnId: string, txnType: 'Bill' | 'Purchase' | 'Invoice'): Promise<QboAttachable[]> {

@@ -4,6 +4,7 @@ import { Icon, fmtCurrency } from '../Icon';
 import type { ExtractionStatus, ExtractionRow } from '../../types/domain';
 import { t, useLang } from '../../i18n';
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
+import { qboTxnUrl } from '../../shared/qbo-url';
 
 type Tab = 'amb' | 'nf' | 'nopj';
 
@@ -11,22 +12,6 @@ type Tab = 'amb' | 'nf' | 'nopj';
 // rationale. Could be promoted to a shared util if a third screen needs it.
 function isSplitChild(r: { amount: number; splitGroupSize?: number; splitIndex?: number }): boolean {
   return (r.splitGroupSize ?? 1) > 1 && (r.splitIndex ?? 0) > 0 && r.amount === 0;
-}
-
-// Build a URL that opens the exact bill / expense / invoice in the QBO
-// web app instead of dropping the user on the global search page.
-// QBO's URL conventions:
-//   - Bill        → /app/bill?txnId={id}
-//   - Purchase    → /app/expense?txnId={id}    (cash purchase / credit card)
-//   - Invoice     → /app/invoice?txnId={id}    (outgoing customer invoice)
-function qboTxnUrl(txnId: string, txnType: 'Bill' | 'Purchase' | 'Invoice'): string {
-  const path =
-    txnType === 'Bill'
-      ? 'bill'
-      : txnType === 'Invoice'
-        ? 'invoice'
-        : 'expense';
-  return `https://qbo.intuit.com/app/${path}?txnId=${encodeURIComponent(txnId)}`;
 }
 
 export function Review() {
