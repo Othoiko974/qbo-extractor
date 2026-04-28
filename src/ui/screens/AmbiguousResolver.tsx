@@ -1,0 +1,448 @@
+import React from 'react';
+import { useStore } from '../../store/store';
+import { Icon, fmtCurrency } from '../Icon';
+import type { RunRowCandidate } from '../../types/domain';
+import { t, useLang } from '../../i18n';
+import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
+
+// Resolver screen — image 2 of the design handoff. Shown when the user
+// clicks "Choisir" on an ambiguous row in the Review screen. The candidates
+// were captured by the engine when amb was detected, so this view is
+// offline (no QBO round-trip until the user picks one).
+export function AmbiguousResolver() {
+  useLang();
+  const {
+    resolverRowId,
+    resolverCandidates,
+    resolverLoading,
+    resolverError,
+    extraction,
+    closeResolver,
+    resolveCandidate,
+  } = useStore();
+
+  const row = extraction.find((r) => r.id === resolverRowId);
+  const [picked, setPicked] = React.useState<{ txnId: string; txnType: 'Bill' | 'Purchase' | 'Invoice' } | null>(null);
+
+  React.useEffect(() => {
+    setPicked(null);
+  }, [resolverRowId]);
+
+  if (!row) {
+    return (
+      <div className="screen">
+        <div className="topbar">
+          <div className="breadcrumb">
+            <b>{t('resolver.breadcrumb')}</b>
+          </div>
+          <div className="topbar-spacer" />
+          <button className="btn btn-sm btn-ghost" onClick={closeResolver}>
+            {t('common.back')}
+          </button>
+        </div>
+        <div className="content pad" style={{ color: 'var(--muted)' }}>
+          {t('resolver.no_row')}
+        </div>
+      </div>
+    );
+  }
+
+  const submit = () => {
+    if (!picked) return;
+    void resolveCandidate(picked.txnId, picked.txnType);
+  };
+
+  const dismiss = async () => {
+    if (row.runRowId) {
+      try {
+        await window.qboApi.dismissCandidates(row.runRowId);
+      } catch {
+        /* ignore */
+      }
+    }
+    closeResolver();
+  };
+
+  // Keyboard navigation. ↑/↓ moves between candidates, 1-9 jumps directly,
+  // ↵ confirms (Télécharger), Esc closes. Listener short-circuits when no
+  // candidates loaded yet (e.g. while resolverLoading).
+  const pickedIndex = picked
+    ? resolverCandidates.findIndex(
+        (c) => c.txnId === picked.txnId && c.txnType === picked.txnType,
+      )
+    : -1;
+  const movePick = (delta: number) => {
+    if (resolverCandidates.length === 0) return;
+    const i = pickedIndex < 0 ? 0 : pickedIndex;
+    const next = Math.max(0, Math.min(resolverCandidates.length - 1, i + delta));
+    const c = resolverCandidates[next];
+    setPicked({
+      txnId: c.txnId,
+      txnType: c.txnType as 'Bill' | 'Purchase' | 'Invoice',
+    });
+  };
+  useKeyboardShortcuts([
+    {
+      key: 'ArrowDown',
+      handler: () => movePick(1),
+      label: t('shortcuts.resolver.next'),
+      group: t('shortcuts.group.navigation'),
+    },
+    {
+      key: 'ArrowUp',
+      handler: () => movePick(-1),
+      label: t('shortcuts.resolver.prev'),
+      group: t('shortcuts.group.navigation'),
+    },
+    {
+      key: 'Enter',
+      handler: submit,
+      label: t('shortcuts.resolver.confirm'),
+      group: t('shortcuts.group.actions'),
+    },
+    {
+      key: 'Escape',
+      handler: () => void dismiss(),
+      evenInInput: true,
+      label: t('shortcuts.resolver.dismiss'),
+      group: t('shortcuts.group.actions'),
+    },
+    // 1..9 jump-to-candidate. We only label the first three to keep the
+    // overlay tight; the others still work but stay implicit.
+    ...Array.from({ length: 9 }, (_, i) => ({
+      key: String(i + 1),
+      handler: () => {
+        const c = resolverCandidates[i];
+        if (!c) return;
+        setPicked({
+          txnId: c.txnId,
+          txnType: c.txnType as 'Bill' | 'Purchase' | 'Invoice',
+        });
+      },
+      label:
+        i < 3 && i < resolverCandidates.length
+          ? t('shortcuts.resolver.pick_n', { n: i + 1 })
+          : undefined,
+      group: i < 3 ? t('shortcuts.group.selection') : undefined,
+    })),
+  ]);
+
+  return (
+    <div className="screen">
+      <div className="topbar">
+        <div className="breadcrumb">
+          <span>{t('resolver.breadcrumb')}</span>
+          <span>›</span>
+          <b>{t('resolver.ambiguous')}</b>
+        </div>
+        <div className="topbar-spacer" />
+        <button className="btn btn-sm btn-ghost" onClick={closeResolver}>
+          {t('common.back')}
+        </button>
+      </div>
+
+      <div className="content pad" style={{ maxWidth: 980, margin: '0 auto', width: '100%' }}>
+        <header
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 16,
+            marginBottom: 20,
+          }}
+        >
+          <button
+            onClick={closeResolver}
+            className="btn btn-ghost btn-icon"
+            title={t('common.back')}
+            style={{ marginTop: 2 }}
+          >
+            ←
+          </button>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 15, fontWeight: 600, lineHeight: 1.3 }}>
+              {t('resolver.title', { num: row.docNumber })}
+            </div>
+            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              {t('resolver.subtitle', {
+                n: resolverCandidates.length,
+                s: resolverCandidates.length > 1 ? 's' : '',
+                s2: resolverCandidates.length > 1 ? 'nt' : '',
+              })}
+            </div>
+          </div>
+          <span
+            className="chip chip-warn"
+            style={{ flexShrink: 0, fontSize: 11, padding: '4px 10px' }}
+          >
+            <Icon name="alert" size={11} /> {t('resolver.ambiguous')}
+          </span>
+        </header>
+
+        {resolverLoading && (
+          <div className="card-surface" style={{ padding: 16, color: 'var(--muted)', fontSize: 12 }}>
+            {t('resolver.loading')}
+          </div>
+        )}
+
+        {resolverError && (
+          <div
+            className="card-surface"
+            style={{ padding: 12, color: 'var(--err)', fontSize: 12, marginBottom: 12 }}
+          >
+            {resolverError}
+          </div>
+        )}
+
+        {!resolverLoading && resolverCandidates.length === 0 && !resolverError && (
+          <div
+            className="card-surface"
+            style={{ padding: 20, textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}
+          >
+            {t('resolver.empty')}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {resolverCandidates.map((c) => (
+            <CandidateCard
+              key={c.id}
+              candidate={c}
+              selected={picked?.txnId === c.txnId && picked.txnType === c.txnType}
+              onSelect={() =>
+                setPicked({
+                  txnId: c.txnId,
+                  txnType: c.txnType as 'Bill' | 'Purchase' | 'Invoice',
+                })
+              }
+            />
+          ))}
+        </div>
+
+        {resolverCandidates.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: 8,
+              marginTop: 24,
+            }}
+          >
+            <button className="btn" onClick={dismiss} disabled={resolverLoading}>
+              {t('resolver.dismiss')}
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={submit}
+              disabled={!picked || resolverLoading}
+            >
+              {resolverLoading ? t('resolver.downloading') : t('resolver.download')}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CandidateCard({
+  candidate,
+  selected,
+  onSelect,
+}: {
+  candidate: RunRowCandidate;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const typeChipClass =
+    candidate.txnType === 'Bill'
+      ? 'chip-info'
+      : candidate.txnType === 'Purchase'
+        ? 'chip-warn'
+        : '';
+
+  return (
+    <div
+      onClick={onSelect}
+      className="card-surface"
+      style={{
+        padding: 16,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 14,
+        cursor: 'pointer',
+        borderColor: selected ? 'var(--accent)' : 'var(--line)',
+        borderWidth: selected ? 2 : 1,
+        // Compensate the extra border so cards don't shift when selected.
+        margin: selected ? -1 : 0,
+      }}
+    >
+      <input
+        type="radio"
+        checked={selected}
+        onChange={onSelect}
+        style={{ flexShrink: 0, accentColor: 'var(--accent)' }}
+      />
+      <span
+        className={`chip ${typeChipClass}`}
+        style={{ flexShrink: 0, fontSize: 11, padding: '3px 10px' }}
+      >
+        {candidate.txnType}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <span style={{ fontSize: 13.5, fontWeight: 600 }}>
+            {candidate.vendorName ?? '—'}
+          </span>
+          <span
+            className="mono"
+            style={{ fontSize: 10.5, color: 'var(--muted)' }}
+          >
+            txnId {candidate.txnId}
+          </span>
+        </div>
+        <div
+          className="mono"
+          style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 4 }}
+        >
+          {candidate.txnDate ?? '—'} ·{' '}
+          {candidate.totalAmount != null
+            ? fmtCurrency(candidate.totalAmount)
+            : '—'}{' '}
+          ·{' '}
+          {candidate.attachableCount === 0
+            ? t('resolver.no_attachment')
+            : t('resolver.attachments', {
+                n: candidate.attachableCount,
+                s: candidate.attachableCount > 1 ? 's' : '',
+              })}
+        </div>
+      </div>
+      <ThumbnailStack kinds={candidate.attachableKinds} count={candidate.attachableCount} />
+      <button
+        className="btn btn-ghost btn-icon"
+        title={t('resolver.open_qbo_txn')}
+        onClick={(e) => {
+          e.stopPropagation();
+          const url = `https://qbo.intuit.com/app/${candidate.txnType === 'Bill' ? 'bill' : 'expense'}?txnId=${encodeURIComponent(candidate.txnId)}`;
+          void window.qboApi.openUrl(url);
+        }}
+        style={{ flexShrink: 0 }}
+      >
+        <Icon name="external" size={12} />
+      </button>
+    </div>
+  );
+}
+
+function ThumbnailStack({ kinds, count }: { kinds: string[]; count: number }) {
+  if (count === 0) {
+    return (
+      <div
+        style={{
+          width: 64,
+          height: 70,
+          border: '1.5px dashed var(--line)',
+          borderRadius: 6,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--muted-2)',
+          fontSize: 10,
+          fontStyle: 'italic',
+          flexShrink: 0,
+        }}
+      >
+        aucune
+      </div>
+    );
+  }
+
+  // Display up to 2 stacked thumbnails; if there are more, show "+N".
+  const shown = kinds.slice(0, 2);
+  const overflow = Math.max(0, count - shown.length);
+  return (
+    <div style={{ position: 'relative', width: 86, height: 70, flexShrink: 0 }}>
+      {shown.map((k, i) => (
+        <Thumb
+          key={i}
+          kind={k}
+          style={{
+            position: 'absolute',
+            left: i * 26,
+            top: i * 4,
+            transform: i === 0 ? 'rotate(-3deg)' : 'rotate(2deg)',
+            zIndex: shown.length - i,
+          }}
+        />
+      ))}
+      {overflow > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            right: 0,
+            bottom: 0,
+            width: 24,
+            height: 24,
+            borderRadius: 12,
+            background: 'var(--ink)',
+            color: '#fff',
+            fontSize: 10,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontWeight: 600,
+            fontFamily: 'var(--mono)',
+            zIndex: 10,
+          }}
+        >
+          +{overflow}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const KIND_STYLES: Record<string, { bg: string; fg: string; label: string }> = {
+  pdf: { bg: '#f3e0e0', fg: '#7a2929', label: 'PDF' },
+  jpg: { bg: '#e5dfb6', fg: '#5b4a14', label: 'JPG' },
+  jpeg: { bg: '#e5dfb6', fg: '#5b4a14', label: 'JPG' },
+  png: { bg: '#dee9d8', fg: '#2d4a23', label: 'PNG' },
+  heic: { bg: '#e2dfe9', fg: '#3a2e58', label: 'HEIC' },
+  tiff: { bg: '#dde6e9', fg: '#1f4451', label: 'TIFF' },
+  gif: { bg: '#f0dfe5', fg: '#5e1f3a', label: 'GIF' },
+  webp: { bg: '#dde9e8', fg: '#1f4a48', label: 'WEBP' },
+};
+
+function Thumb({ kind, style }: { kind: string; style?: React.CSSProperties }) {
+  const k = (kind || '').toLowerCase();
+  const palette = KIND_STYLES[k] ?? { bg: '#eee', fg: 'var(--muted)', label: k.toUpperCase() || 'FILE' };
+  return (
+    <div
+      style={{
+        width: 56,
+        height: 64,
+        borderRadius: 4,
+        background: palette.bg,
+        border: '1px solid rgba(0,0,0,0.08)',
+        boxShadow: '0 2px 4px rgba(0,0,0,0.08)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+        padding: 4,
+        ...style,
+      }}
+    >
+      <span
+        style={{
+          fontSize: 9.5,
+          fontFamily: 'var(--mono)',
+          fontWeight: 700,
+          color: palette.fg,
+          letterSpacing: '0.04em',
+        }}
+      >
+        {palette.label}
+      </span>
+    </div>
+  );
+}
