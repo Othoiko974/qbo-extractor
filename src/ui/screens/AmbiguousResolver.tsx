@@ -60,6 +60,7 @@ export function AmbiguousResolver() {
     filePath: string;
     contentType: string;
     fileName: string;
+    isRefacturation: boolean;
   } | null>(null);
   const [previewLoading, setPreviewLoading] = React.useState<string | null>(null);
   const [previewError, setPreviewError] = React.useState<string | null>(null);
@@ -77,7 +78,14 @@ export function AmbiguousResolver() {
         companyKey,
         txnId,
         txnType,
-      )) as { ok: boolean; filePath?: string; contentType?: string; fileName?: string; error?: string };
+      )) as {
+        ok: boolean;
+        filePath?: string;
+        contentType?: string;
+        fileName?: string;
+        isRefacturation?: boolean;
+        error?: string;
+      };
       if (!res.ok || !res.filePath) {
         setPreviewError(res.error ?? 'Échec du chargement de la pièce jointe.');
       } else {
@@ -85,6 +93,7 @@ export function AmbiguousResolver() {
           filePath: res.filePath,
           contentType: res.contentType ?? '',
           fileName: res.fileName ?? '',
+          isRefacturation: res.isRefacturation ?? false,
         });
       }
     } catch (err) {
@@ -422,6 +431,7 @@ export function AmbiguousResolver() {
           filePath={previewState.filePath}
           contentType={previewState.contentType}
           fileName={previewState.fileName}
+          isRefacturation={previewState.isRefacturation}
           onClose={() => setPreviewState(null)}
         />
       )}
@@ -437,11 +447,13 @@ function InlinePreviewOverlay({
   filePath,
   contentType,
   fileName,
+  isRefacturation,
   onClose,
 }: {
   filePath: string;
   contentType: string;
   fileName: string;
+  isRefacturation: boolean;
   onClose: () => void;
 }) {
   const url = toLocalFileUrl(filePath);
@@ -528,6 +540,25 @@ function InlinePreviewOverlay({
             ×
           </button>
         </div>
+        {isRefacturation && (
+          <div
+            style={{
+              padding: '8px 12px',
+              background: 'var(--warn)',
+              color: '#fff',
+              borderRadius: 6,
+              fontSize: 12,
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}
+            title={t('resolver.preview_refacturation_hint')}
+          >
+            <span>⚠</span>
+            <span>{t('resolver.preview_refacturation_warn')}</span>
+          </div>
+        )}
         {isPdf && (
           <iframe
             src={url}

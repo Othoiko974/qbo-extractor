@@ -30,6 +30,7 @@ import { readExcelBudget } from './budget/excel';
 import { normalizeVendors } from './budget/normalize';
 import { ExtractionEngine } from './extraction/engine';
 import { onQboRequest, QboClient } from './qbo/client';
+import { PDFParse } from 'pdf-parse';
 
 export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
   const engine = new ExtractionEngine(() => getMainWindow()?.webContents ?? null);
@@ -678,11 +679,31 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
         fs.mkdirSync(tempDir, { recursive: true });
         const tempPath = path.join(tempDir, `${args.txnId}_${baseName}${ext}`);
         fs.writeFileSync(tempPath, dl.buffer);
+
+        // Refacturation detection: if the PDF text matches QBO's standard
+        // outgoing-invoice template, this is the user's own re-billing
+        // imputation, not the supplier's original facture. The user wants
+        // a clear visual signal because the filename alone is ambiguous.
+        let isRefacturation = false;
+        if (ext === '.pdf') {
+          try {
+            const userCompanyLabels = Companies.list().map((c) => c.label);
+            const parser = new PDFParse({ data: dl.buffer });
+            const parsed = await parser.getText();
+            isRefacturation = looksLikeQboInternalInvoice(parsed.text, userCompanyLabels);
+          } catch {
+            // PDF parse failures are non-fatal — fall through with the file
+            // displayed and no banner. Common cause: scanned PDFs without
+            // an embedded text layer.
+          }
+        }
+
         return {
           ok: true,
           filePath: tempPath,
           contentType: dl.contentType,
           fileName: fileNameRaw,
+          isRefacturation,
         };
       } catch (err) {
         return { ok: false, error: errMsg(err) };
@@ -907,6 +928,36 @@ function toClientCompany(c: ReturnType<typeof Companies.get> & object) {
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+// Detect QuickBooks Online's outgoing-invoice template. When the user
+// downloads what they think is a supplier facture but the PJ is
+// actually their own re-billing imputation (the accountant stapled it
+// to the wrong txn), this flag drives a "⚠ Refacturation interne"
+// banner in the preview overlay. Two independent text signatures —
+// the exact-string footer and the payment-instruction line — keep
+// false positives near zero (they only appear together on QBO-
+// generated invoices in the FR-CA template).
+function looksLikeQboInternalInvoice(text: string, userCompanyLabels: string[]): boolean {
+  if (!text) return false;
+  // Strong signal: QBO's exact French Canadian footer phrase. Highly
+  // specific to the template — a real supplier's facture would never
+  // word it this way.
+  const qboFooter = /par\s+ch[èe]que\s+ou\s+faire\s+un\s+d[ée]p[ôo]t\s+direct\s+au\s+compte/i;
+  if (qboFooter.test(text)) return true;
+  // Secondary: payment-instruction line names one of the user's own
+  // companies — the issuer is the user's QBO realm so the file is by
+  // definition outgoing (Invoice/imputation), not a supplier Bill.
+  for (const label of userCompanyLabels) {
+    if (!label) continue;
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(
+      `veuillez\\s+[ée]mettre\\s+votre\\s+paiement\\s+[àa]\\s*:?\\s*${escaped}`,
+      'i',
+    );
+    if (re.test(text)) return true;
+  }
+  return false;
 }
 
 // Best-effort content-type to extension map for files where QBO didn't

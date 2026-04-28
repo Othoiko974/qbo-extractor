@@ -163,6 +163,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     'resolver.preview_attachable': 'Cliquer pour prévisualiser la pièce jointe',
     'resolver.preview_close_hint': 'Échap pour fermer',
     'resolver.preview_unsupported': 'Format non prévisualisable ({type}). Télécharge la sélection pour ouvrir avec ton app par défaut.',
+    'resolver.preview_refacturation_warn':
+      "Refacturation interne (template QBO) — pas la facture d'origine du fournisseur.",
+    'resolver.preview_refacturation_hint':
+      "Détecté via la signature du template QBO French Canadian (\"Par chèque ou faire un dépôt direct au compte\" + nom de ta compagnie en émetteur). Si tu cherches le PDF supplier d'origine, essaie le bouton \"Chercher dans les autres compagnies\".",
     'resolver.download': 'Télécharger la sélection',
     'resolver.downloading': 'Téléchargement…',
     'resolver.no_attachment': 'aucune pièce jointe',
@@ -476,6 +480,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     'resolver.preview_attachable': 'Click to preview the attachment',
     'resolver.preview_close_hint': 'Esc to close',
     'resolver.preview_unsupported': 'Format not previewable ({type}). Download the selection to open it with your default app.',
+    'resolver.preview_refacturation_warn':
+      'Internal re-billing (QBO template) — not the supplier\'s original invoice.',
+    'resolver.preview_refacturation_hint':
+      'Detected via the QBO French Canadian template signature ("Par chèque ou faire un dépôt direct au compte" + your company name as sender). If you\'re looking for the supplier PDF, try the "Search other companies" button.',
     'resolver.download': 'Download selection',
     'resolver.downloading': 'Downloading…',
     'resolver.no_attachment': 'no attachment',
