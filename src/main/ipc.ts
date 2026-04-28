@@ -646,6 +646,50 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     return { ok: true };
   });
 
+  // Quick-look style preview of the first attachable on a candidate's txn.
+  // Fetches the file via QBO's signed-URL endpoint, drops it in
+  // userData/preview-cache, and returns the path so the renderer can
+  // load it through the qbo-file:// protocol. Two API calls per preview
+  // (getAttachables + downloadAttachment) — payable manually since each
+  // click is a deliberate disambiguation step that saves a round-trip
+  // through the QBO web app.
+  ipcMain.handle(
+    'qbo:previewAttachable',
+    async (_evt, args: { companyKey: string; txnId: string; txnType: 'Bill' | 'Purchase' | 'Invoice' }) => {
+      const company = Companies.get(args.companyKey);
+      if (!company || !company.qbo_realm_id) {
+        return { ok: false, error: 'Compagnie introuvable.' };
+      }
+      const token = await Secrets.getQbo(company.key);
+      if (!token) return { ok: false, error: 'Token QBO manquant.' };
+      try {
+        const client = new QboClient(company.key, company.qbo_realm_id, company.qbo_env);
+        const attachables = await client.getAttachables(args.txnId, args.txnType);
+        if (attachables.length === 0) {
+          return { ok: false, error: 'Aucune pièce jointe sur cette transaction.' };
+        }
+        const att = attachables[0];
+        const dl = await client.downloadAttachment(att);
+        const fileNameRaw = att.FileName || `attachment_${args.txnId}`;
+        const safeName = fileNameRaw.replace(/[\\/:*?"<>|\n\r\t]/g, '_');
+        const ext = path.extname(safeName) || extFromContentType(dl.contentType);
+        const baseName = path.basename(safeName, path.extname(safeName));
+        const tempDir = path.join(app.getPath('userData'), 'preview-cache');
+        fs.mkdirSync(tempDir, { recursive: true });
+        const tempPath = path.join(tempDir, `${args.txnId}_${baseName}${ext}`);
+        fs.writeFileSync(tempPath, dl.buffer);
+        return {
+          ok: true,
+          filePath: tempPath,
+          contentType: dl.contentType,
+          fileName: fileNameRaw,
+        };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
+    },
+  );
+
   // Cross-company candidate search: when a row's active-company candidates
   // include only the re-billing imputation (Invoice without PJ) but the
   // supplier facture lives in a sister company's books (refacturation
@@ -863,6 +907,21 @@ function toClientCompany(c: ReturnType<typeof Companies.get> & object) {
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+// Best-effort content-type to extension map for files where QBO didn't
+// give a usable FileName. Falls back to .bin so we always end with a
+// concrete suffix the renderer can sniff for type.
+function extFromContentType(ct: string): string {
+  const lower = ct.toLowerCase();
+  if (lower.includes('pdf')) return '.pdf';
+  if (lower.includes('jpeg') || lower.includes('jpg')) return '.jpg';
+  if (lower.includes('png')) return '.png';
+  if (lower.includes('heic')) return '.heic';
+  if (lower.includes('tiff')) return '.tiff';
+  if (lower.includes('gif')) return '.gif';
+  if (lower.includes('webp')) return '.webp';
+  return '.bin';
 }
 
 // Coarse "kind" tag for an attachable so the resolver UI can stack thumbs

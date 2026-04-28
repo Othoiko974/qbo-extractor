@@ -6,6 +6,16 @@ import { t, useLang } from '../../i18n';
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
 import { qboTxnUrl } from '../../shared/qbo-url';
 
+// Convert an absolute filesystem path into the qbo-file:// URL the
+// renderer can load via <iframe>/<img>. Mirrors the helper in Preview.tsx.
+function toLocalFileUrl(absPath: string): string {
+  const encoded = absPath
+    .split('/')
+    .map((seg) => encodeURIComponent(seg))
+    .join('/');
+  return `qbo-file://local${encoded}`;
+}
+
 // Resolver screen — image 2 of the design handoff. Shown when the user
 // clicks "Choisir" on an ambiguous row in the Review screen. The candidates
 // were captured by the engine when amb was detected, so this view is
@@ -41,6 +51,48 @@ export function AmbiguousResolver() {
   const sisterCount = companies.filter(
     (c) => c.key !== activeCompanyKey && !!c.qboRealmId && c.connected,
   ).length;
+
+  // Quick-look preview state — set when the user clicks a thumbnail.
+  // Stays a popover within the resolver so closing it (Esc / backdrop)
+  // returns to the candidate list with all picked / sister state intact,
+  // unlike navigating away to the full Preview screen.
+  const [previewState, setPreviewState] = React.useState<{
+    filePath: string;
+    contentType: string;
+    fileName: string;
+  } | null>(null);
+  const [previewLoading, setPreviewLoading] = React.useState<string | null>(null);
+  const [previewError, setPreviewError] = React.useState<string | null>(null);
+
+  const openInlinePreview = async (
+    companyKey: string,
+    txnId: string,
+    txnType: 'Bill' | 'Purchase' | 'Invoice',
+  ) => {
+    const key = `${companyKey}|${txnType}|${txnId}`;
+    setPreviewLoading(key);
+    setPreviewError(null);
+    try {
+      const res = (await window.qboApi.previewAttachable(
+        companyKey,
+        txnId,
+        txnType,
+      )) as { ok: boolean; filePath?: string; contentType?: string; fileName?: string; error?: string };
+      if (!res.ok || !res.filePath) {
+        setPreviewError(res.error ?? 'Échec du chargement de la pièce jointe.');
+      } else {
+        setPreviewState({
+          filePath: res.filePath,
+          contentType: res.contentType ?? '',
+          fileName: res.fileName ?? '',
+        });
+      }
+    } catch (err) {
+      setPreviewError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPreviewLoading(null);
+    }
+  };
 
   React.useEffect(() => {
     setPicked(null);
@@ -229,23 +281,30 @@ export function AmbiguousResolver() {
         )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {resolverCandidates.map((c) => (
-            <CandidateCard
-              key={c.id}
-              candidate={c}
-              selected={
-                picked?.txnId === c.txnId &&
-                picked.txnType === c.txnType &&
-                !picked.fetchFromCompanyKey
-              }
-              onSelect={() =>
-                setPicked({
-                  txnId: c.txnId,
-                  txnType: c.txnType as 'Bill' | 'Purchase' | 'Invoice',
-                })
-              }
-            />
-          ))}
+          {resolverCandidates.map((c) => {
+            const previewKey = activeCompanyKey
+              ? `${activeCompanyKey}|${c.txnType}|${c.txnId}`
+              : null;
+            return (
+              <CandidateCard
+                key={c.id}
+                candidate={c}
+                selected={
+                  picked?.txnId === c.txnId &&
+                  picked.txnType === c.txnType &&
+                  !picked.fetchFromCompanyKey
+                }
+                onSelect={() =>
+                  setPicked({
+                    txnId: c.txnId,
+                    txnType: c.txnType as 'Bill' | 'Purchase' | 'Invoice',
+                  })
+                }
+                onPreview={openInlinePreview}
+                previewLoading={previewLoading === previewKey}
+              />
+            );
+          })}
         </div>
 
         {sisterCount > 0 && (
@@ -288,24 +347,29 @@ export function AmbiguousResolver() {
                   })}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {resolverSisterCandidates.map((c, i) => (
-                    <SisterCandidateCard
-                      key={`${c.companyKey}-${c.txnType}-${c.txnId}-${i}`}
-                      candidate={c}
-                      selected={
-                        picked?.txnId === c.txnId &&
-                        picked.txnType === c.txnType &&
-                        picked.fetchFromCompanyKey === c.companyKey
-                      }
-                      onSelect={() =>
-                        setPicked({
-                          txnId: c.txnId,
-                          txnType: c.txnType,
-                          fetchFromCompanyKey: c.companyKey,
-                        })
-                      }
-                    />
-                  ))}
+                  {resolverSisterCandidates.map((c, i) => {
+                    const previewKey = `${c.companyKey}|${c.txnType}|${c.txnId}`;
+                    return (
+                      <SisterCandidateCard
+                        key={`${c.companyKey}-${c.txnType}-${c.txnId}-${i}`}
+                        candidate={c}
+                        selected={
+                          picked?.txnId === c.txnId &&
+                          picked.txnType === c.txnType &&
+                          picked.fetchFromCompanyKey === c.companyKey
+                        }
+                        onSelect={() =>
+                          setPicked({
+                            txnId: c.txnId,
+                            txnType: c.txnType,
+                            fetchFromCompanyKey: c.companyKey,
+                          })
+                        }
+                        onPreview={openInlinePreview}
+                        previewLoading={previewLoading === previewKey}
+                      />
+                    );
+                  })}
                 </div>
               </>
             )}
@@ -334,6 +398,175 @@ export function AmbiguousResolver() {
           </div>
         )}
       </div>
+      {previewError && (
+        <div
+          style={{
+            position: 'fixed',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            bottom: 24,
+            background: 'var(--err)',
+            color: '#fff',
+            padding: '8px 14px',
+            borderRadius: 8,
+            fontSize: 12,
+            zIndex: 999,
+          }}
+          onClick={() => setPreviewError(null)}
+        >
+          {previewError}
+        </div>
+      )}
+      {previewState && (
+        <InlinePreviewOverlay
+          filePath={previewState.filePath}
+          contentType={previewState.contentType}
+          fileName={previewState.fileName}
+          onClose={() => setPreviewState(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Quick-look overlay shown when the user clicks an attachable thumbnail.
+// Loads the temp file the IPC dropped in userData/preview-cache via the
+// qbo-file:// protocol. Esc / backdrop click / X button close — all
+// preserve the resolver's picked / sister state.
+function InlinePreviewOverlay({
+  filePath,
+  contentType,
+  fileName,
+  onClose,
+}: {
+  filePath: string;
+  contentType: string;
+  fileName: string;
+  onClose: () => void;
+}) {
+  const url = toLocalFileUrl(filePath);
+  const lower = (fileName + ' ' + contentType).toLowerCase();
+  const isPdf = /\.pdf\b/.test(lower) || lower.includes('pdf');
+  const isImage =
+    /\.(jpe?g|png|gif|webp|tiff?|heic|bmp)\b/.test(lower) ||
+    lower.includes('image/');
+
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onClose]);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0, 0, 0, 0.72)',
+        zIndex: 1000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: 'var(--bg)',
+          border: '1px solid var(--line)',
+          borderRadius: 12,
+          padding: 12,
+          maxWidth: '92vw',
+          maxHeight: '92vh',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+          minWidth: 320,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            paddingBottom: 6,
+          }}
+        >
+          <span
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              flex: 1,
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            title={fileName}
+          >
+            {fileName || t('resolver.preview_attachable')}
+          </span>
+          <span
+            className="muted"
+            style={{ fontSize: 11, fontStyle: 'italic' }}
+          >
+            {t('resolver.preview_close_hint')}
+          </span>
+          <button
+            className="btn btn-sm btn-ghost"
+            onClick={onClose}
+            aria-label={t('common.back')}
+            style={{ flexShrink: 0 }}
+          >
+            ×
+          </button>
+        </div>
+        {isPdf && (
+          <iframe
+            src={url}
+            style={{
+              width: '80vw',
+              height: '80vh',
+              border: 0,
+              background: '#fff',
+              borderRadius: 6,
+            }}
+            title={fileName}
+          />
+        )}
+        {!isPdf && isImage && (
+          <img
+            src={url}
+            alt={fileName}
+            style={{
+              maxWidth: '80vw',
+              maxHeight: '80vh',
+              objectFit: 'contain',
+              background: '#fff',
+              borderRadius: 6,
+            }}
+          />
+        )}
+        {!isPdf && !isImage && (
+          <div
+            style={{
+              padding: 32,
+              color: 'var(--muted)',
+              fontSize: 13,
+              textAlign: 'center',
+            }}
+          >
+            {t('resolver.preview_unsupported', { type: contentType || 'inconnu' })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -342,10 +575,18 @@ function CandidateCard({
   candidate,
   selected,
   onSelect,
+  onPreview,
+  previewLoading,
 }: {
   candidate: RunRowCandidate;
   selected: boolean;
   onSelect: () => void;
+  onPreview?: (
+    companyKey: string,
+    txnId: string,
+    txnType: 'Bill' | 'Purchase' | 'Invoice',
+  ) => void;
+  previewLoading?: boolean;
 }) {
   // Pull the active company's realmId so the deep-link URL routes to the
   // correct QBO company instead of whichever company the user's web
@@ -417,7 +658,16 @@ function CandidateCard({
               })}
         </div>
       </div>
-      <ThumbnailStack kinds={candidate.attachableKinds} count={candidate.attachableCount} />
+      <ThumbnailStack
+        kinds={candidate.attachableKinds}
+        count={candidate.attachableCount}
+        loading={previewLoading}
+        onClick={
+          onPreview && activeCompanyKey && candidate.attachableCount > 0
+            ? () => onPreview(activeCompanyKey, candidate.txnId, candidate.txnType)
+            : undefined
+        }
+      />
       <button
         className="btn btn-ghost btn-icon"
         title={t('resolver.open_qbo_txn')}
@@ -442,10 +692,18 @@ function SisterCandidateCard({
   candidate,
   selected,
   onSelect,
+  onPreview,
+  previewLoading,
 }: {
   candidate: SisterCandidate;
   selected: boolean;
   onSelect: () => void;
+  onPreview?: (
+    companyKey: string,
+    txnId: string,
+    txnType: 'Bill' | 'Purchase' | 'Invoice',
+  ) => void;
+  previewLoading?: boolean;
 }) {
   const sister = useStore((s) =>
     s.companies.find((c) => c.key === candidate.companyKey),
@@ -521,6 +779,12 @@ function SisterCandidateCard({
       <ThumbnailStack
         kinds={candidate.attachableKinds}
         count={candidate.attachableCount}
+        loading={previewLoading}
+        onClick={
+          onPreview && candidate.attachableCount > 0
+            ? () => onPreview(candidate.companyKey, candidate.txnId, candidate.txnType)
+            : undefined
+        }
       />
       <button
         className="btn btn-ghost btn-icon"
@@ -539,7 +803,17 @@ function SisterCandidateCard({
   );
 }
 
-function ThumbnailStack({ kinds, count }: { kinds: string[]; count: number }) {
+function ThumbnailStack({
+  kinds,
+  count,
+  onClick,
+  loading,
+}: {
+  kinds: string[];
+  count: number;
+  onClick?: () => void;
+  loading?: boolean;
+}) {
   if (count === 0) {
     return (
       <div
@@ -566,7 +840,26 @@ function ThumbnailStack({ kinds, count }: { kinds: string[]; count: number }) {
   const shown = kinds.slice(0, 2);
   const overflow = Math.max(0, count - shown.length);
   return (
-    <div style={{ position: 'relative', width: 86, height: 70, flexShrink: 0 }}>
+    <div
+      onClick={
+        onClick
+          ? (e) => {
+              e.stopPropagation();
+              onClick();
+            }
+          : undefined
+      }
+      title={onClick ? t('resolver.preview_attachable') : undefined}
+      style={{
+        position: 'relative',
+        width: 86,
+        height: 70,
+        flexShrink: 0,
+        cursor: onClick ? 'pointer' : 'default',
+        opacity: loading ? 0.5 : 1,
+        transition: 'opacity 120ms',
+      }}
+    >
       {shown.map((k, i) => (
         <Thumb
           key={i}
@@ -580,6 +873,23 @@ function ThumbnailStack({ kinds, count }: { kinds: string[]; count: number }) {
           }}
         />
       ))}
+      {loading && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 99,
+            fontSize: 10,
+            color: 'var(--muted)',
+            fontWeight: 600,
+          }}
+        >
+          …
+        </div>
+      )}
       {overflow > 0 && (
         <div
           style={{
