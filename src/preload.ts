@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+type GValueInputOption = 'RAW' | 'USER_ENTERED';
+type GInsertDataOption = 'OVERWRITE' | 'INSERT_ROWS';
+type GCellValue = string | number | boolean | null;
+type GCellRow = GCellValue[];
+type GSheetsBatchRequest = Record<string, unknown>;
+
 const api = {
   // Companies
   listCompanies: () => ipcRenderer.invoke('companies:list'),
@@ -31,9 +37,121 @@ const api = {
   // Google OAuth + Sheets
   googleConnect: (companyKey: string) => ipcRenderer.invoke('google:connect', companyKey),
   googleDisconnect: (companyKey: string) => ipcRenderer.invoke('google:disconnect', companyKey),
-  googleListWorkbooks: (companyKey: string) => ipcRenderer.invoke('google:listWorkbooks', companyKey),
+  googleListWorkbooks: (companyKey: string, driveId?: string) =>
+    ipcRenderer.invoke('google:listWorkbooks', companyKey, driveId),
+  googleListSharedDrives: (companyKey: string) =>
+    ipcRenderer.invoke('google:listSharedDrives', companyKey),
   googlePickWorkbook: (companyKey: string, workbookId: string, workbookName: string) =>
     ipcRenderer.invoke('google:pickWorkbook', companyKey, workbookId, workbookName),
+
+  // Sheets manipulation (read + write)
+  sheetsGetMeta: (companyKey: string, spreadsheetId: string) =>
+    ipcRenderer.invoke('google:sheetsGetMeta', companyKey, spreadsheetId),
+  sheetsRead: (companyKey: string, spreadsheetId: string, range: string) =>
+    ipcRenderer.invoke('google:sheetsRead', companyKey, spreadsheetId, range),
+  sheetsUpdate: (
+    companyKey: string,
+    spreadsheetId: string,
+    range: string,
+    values: GCellRow[],
+    valueInputOption?: GValueInputOption,
+  ) =>
+    ipcRenderer.invoke(
+      'google:sheetsUpdate',
+      companyKey,
+      spreadsheetId,
+      range,
+      values,
+      valueInputOption,
+    ),
+  sheetsAppend: (
+    companyKey: string,
+    spreadsheetId: string,
+    range: string,
+    values: GCellRow[],
+    valueInputOption?: GValueInputOption,
+    insertDataOption?: GInsertDataOption,
+  ) =>
+    ipcRenderer.invoke(
+      'google:sheetsAppend',
+      companyKey,
+      spreadsheetId,
+      range,
+      values,
+      valueInputOption,
+      insertDataOption,
+    ),
+  sheetsClear: (companyKey: string, spreadsheetId: string, range: string) =>
+    ipcRenderer.invoke('google:sheetsClear', companyKey, spreadsheetId, range),
+  sheetsBatchUpdateValues: (
+    companyKey: string,
+    spreadsheetId: string,
+    data: { range: string; values: GCellRow[] }[],
+    valueInputOption?: GValueInputOption,
+  ) =>
+    ipcRenderer.invoke(
+      'google:sheetsBatchUpdateValues',
+      companyKey,
+      spreadsheetId,
+      data,
+      valueInputOption,
+    ),
+  sheetsBatchUpdate: (
+    companyKey: string,
+    spreadsheetId: string,
+    requests: GSheetsBatchRequest[],
+  ) => ipcRenderer.invoke('google:sheetsBatchUpdate', companyKey, spreadsheetId, requests),
+  sheetsAddSheet: (
+    companyKey: string,
+    spreadsheetId: string,
+    title: string,
+    rowCount?: number,
+    columnCount?: number,
+  ) =>
+    ipcRenderer.invoke(
+      'google:sheetsAddSheet',
+      companyKey,
+      spreadsheetId,
+      title,
+      rowCount,
+      columnCount,
+    ),
+  sheetsDeleteSheet: (companyKey: string, spreadsheetId: string, sheetId: number) =>
+    ipcRenderer.invoke('google:sheetsDeleteSheet', companyKey, spreadsheetId, sheetId),
+  sheetsFindReplace: (
+    companyKey: string,
+    spreadsheetId: string,
+    find: string,
+    replacement: string,
+    options?: {
+      sheetId?: number;
+      matchCase?: boolean;
+      matchEntireCell?: boolean;
+      searchByRegex?: boolean;
+      allSheets?: boolean;
+    },
+  ) =>
+    ipcRenderer.invoke(
+      'google:sheetsFindReplace',
+      companyKey,
+      spreadsheetId,
+      find,
+      replacement,
+      options,
+    ),
+
+  // Drive helpers
+  driveGetFile: (companyKey: string, fileId: string) =>
+    ipcRenderer.invoke('google:driveGetFile', companyKey, fileId),
+  driveCopyFile: (
+    companyKey: string,
+    fileId: string,
+    newName?: string,
+    parentFolderId?: string,
+  ) =>
+    ipcRenderer.invoke('google:driveCopyFile', companyKey, fileId, newName, parentFolderId),
+  driveRenameFile: (companyKey: string, fileId: string, newName: string) =>
+    ipcRenderer.invoke('google:driveRenameFile', companyKey, fileId, newName),
 
   // Excel
   excelPickFile: () => ipcRenderer.invoke('excel:pickFile'),

@@ -6,7 +6,26 @@ import { Companies, Settings, Runs, RunRows, RunRowCandidates, BudgetCache, Vend
 import { Secrets, type QboToken } from './secrets';
 import { connectQbo, disconnectQbo } from './oauth-qbo';
 import { connectGoogle, getGoogleClient } from './oauth-google';
-import { listWorkbooks, readBudget } from './budget/gsheets';
+import { listWorkbooks, listSharedDrives, readBudget } from './budget/gsheets';
+import {
+  getSpreadsheetMeta,
+  readRange,
+  updateRange,
+  appendRange,
+  clearRange,
+  batchUpdateValues,
+  batchUpdateSpreadsheet,
+  addSheet,
+  deleteSheet,
+  findReplace,
+  getDriveFile,
+  copyDriveFile,
+  renameDriveFile,
+  type CellRow,
+  type ValueInputOption,
+  type InsertDataOption,
+} from './budget/gsheets-write';
+import type { sheets_v4 } from 'googleapis';
 import { readExcelBudget } from './budget/excel';
 import { normalizeVendors } from './budget/normalize';
 import { ExtractionEngine } from './extraction/engine';
@@ -198,9 +217,17 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     return { ok: true };
   });
 
-  ipcMain.handle('google:listWorkbooks', async (_evt, companyKey: string) => {
+  ipcMain.handle('google:listWorkbooks', async (_evt, companyKey: string, driveId?: string) => {
     try {
-      return { ok: true, workbooks: await listWorkbooks(companyKey) };
+      return { ok: true, workbooks: await listWorkbooks(companyKey, driveId) };
+    } catch (err) {
+      return { ok: false, error: errMsg(err) };
+    }
+  });
+
+  ipcMain.handle('google:listSharedDrives', async (_evt, companyKey: string) => {
+    try {
+      return { ok: true, drives: await listSharedDrives(companyKey) };
     } catch (err) {
       return { ok: false, error: errMsg(err) };
     }
@@ -215,6 +242,228 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
         gsheets_workbook_name: workbookName,
       });
       return { ok: true };
+    },
+  );
+
+  // ---- Sheets manipulation ----------------------------------------------
+
+  ipcMain.handle(
+    'google:sheetsGetMeta',
+    async (_evt, companyKey: string, spreadsheetId: string) => {
+      try {
+        return { ok: true, meta: await getSpreadsheetMeta(companyKey, spreadsheetId) };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'google:sheetsRead',
+    async (_evt, companyKey: string, spreadsheetId: string, range: string) => {
+      try {
+        return { ok: true, values: await readRange(companyKey, spreadsheetId, range) };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'google:sheetsUpdate',
+    async (
+      _evt,
+      companyKey: string,
+      spreadsheetId: string,
+      range: string,
+      values: CellRow[],
+      valueInputOption?: ValueInputOption,
+    ) => {
+      try {
+        const result = await updateRange(
+          companyKey,
+          spreadsheetId,
+          range,
+          values,
+          valueInputOption,
+        );
+        return { ok: true, ...result };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'google:sheetsAppend',
+    async (
+      _evt,
+      companyKey: string,
+      spreadsheetId: string,
+      range: string,
+      values: CellRow[],
+      valueInputOption?: ValueInputOption,
+      insertDataOption?: InsertDataOption,
+    ) => {
+      try {
+        const result = await appendRange(
+          companyKey,
+          spreadsheetId,
+          range,
+          values,
+          valueInputOption,
+          insertDataOption,
+        );
+        return { ok: true, ...result };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'google:sheetsClear',
+    async (_evt, companyKey: string, spreadsheetId: string, range: string) => {
+      try {
+        const result = await clearRange(companyKey, spreadsheetId, range);
+        return { ok: true, ...result };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'google:sheetsBatchUpdateValues',
+    async (
+      _evt,
+      companyKey: string,
+      spreadsheetId: string,
+      data: { range: string; values: CellRow[] }[],
+      valueInputOption?: ValueInputOption,
+    ) => {
+      try {
+        const result = await batchUpdateValues(companyKey, spreadsheetId, data, valueInputOption);
+        return { ok: true, ...result };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'google:sheetsBatchUpdate',
+    async (
+      _evt,
+      companyKey: string,
+      spreadsheetId: string,
+      requests: sheets_v4.Schema$Request[],
+    ) => {
+      try {
+        const replies = await batchUpdateSpreadsheet(companyKey, spreadsheetId, requests);
+        return { ok: true, replies };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'google:sheetsAddSheet',
+    async (
+      _evt,
+      companyKey: string,
+      spreadsheetId: string,
+      title: string,
+      rowCount?: number,
+      columnCount?: number,
+    ) => {
+      try {
+        const result = await addSheet(companyKey, spreadsheetId, title, rowCount, columnCount);
+        return { ok: true, ...result };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'google:sheetsDeleteSheet',
+    async (_evt, companyKey: string, spreadsheetId: string, sheetId: number) => {
+      try {
+        await deleteSheet(companyKey, spreadsheetId, sheetId);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'google:sheetsFindReplace',
+    async (
+      _evt,
+      companyKey: string,
+      spreadsheetId: string,
+      find: string,
+      replacement: string,
+      options?: {
+        sheetId?: number;
+        matchCase?: boolean;
+        matchEntireCell?: boolean;
+        searchByRegex?: boolean;
+        allSheets?: boolean;
+      },
+    ) => {
+      try {
+        const result = await findReplace(companyKey, spreadsheetId, find, replacement, options);
+        return { ok: true, ...result };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
+    },
+  );
+
+  // ---- Drive helpers ----------------------------------------------------
+
+  ipcMain.handle(
+    'google:driveGetFile',
+    async (_evt, companyKey: string, fileId: string) => {
+      try {
+        return { ok: true, file: await getDriveFile(companyKey, fileId) };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'google:driveCopyFile',
+    async (
+      _evt,
+      companyKey: string,
+      fileId: string,
+      newName?: string,
+      parentFolderId?: string,
+    ) => {
+      try {
+        const result = await copyDriveFile(companyKey, fileId, newName, parentFolderId);
+        return { ok: true, ...result };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'google:driveRenameFile',
+    async (_evt, companyKey: string, fileId: string, newName: string) => {
+      try {
+        await renameDriveFile(companyKey, fileId, newName);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
     },
   );
 

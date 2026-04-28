@@ -7,9 +7,12 @@ import { Secrets, type GoogleToken } from './secrets';
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? '';
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET ?? '';
+// Full read-write scopes — needed to manipulate Sheets on the corporate Shared
+// Drive. A user connected before this change has a token with only the .readonly
+// scopes; calls that mutate will return 403 until they reconnect.
 const SCOPES = [
-  'https://www.googleapis.com/auth/drive.readonly',
-  'https://www.googleapis.com/auth/spreadsheets.readonly',
+  'https://www.googleapis.com/auth/drive',
+  'https://www.googleapis.com/auth/spreadsheets',
   'https://www.googleapis.com/auth/userinfo.email',
 ];
 

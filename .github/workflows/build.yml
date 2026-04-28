@@ -35,12 +35,17 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: npm run make -- --arch=universal
         env:
-          # Code signing is deferred to v2. These are empty so Electron Forge skips signing.
+          # Code signing is deferred to v2. Empty so Electron Forge skips signing.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          # Vite renderer build hits the default ~2GB Node heap on CI runners.
+          # 6GB fits well under the 14GB (mac) / 16GB (win) runner limits.
+          NODE_OPTIONS: --max-old-space-size=6144
 
       - name: Make (Windows)
         if: matrix.os == 'windows-latest'
         run: npm run make
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
