@@ -186,10 +186,29 @@ export function looksLikePayrollPeriod(s: string): boolean {
 }
 
 function splitLines(raw: string): string[] {
-  return raw
+  const lines = raw
     .split(/\r?\n/)
     .map((s) => s.trim())
     .filter(Boolean);
+  // Some cells wrap a single multi-segment receipt across two lines:
+  //   "VSL; 087; The Home Depot F-7128"
+  //   "00003 45777"
+  // The continuation is pure digits (one or more numeric segments). Merge
+  // it into the prior line so the receipt regex (hdSpaced / tail) sees the
+  // full ID. Guard with "prior line has letters" so genuine standalone
+  // invoice numbers ("4501" \n "4502") aren't accidentally concatenated.
+  const merged: string[] = [];
+  for (const line of lines) {
+    const isNumericContinuation = /^\d+(?:\s+\d+)*$/.test(line);
+    const priorHasLetters =
+      merged.length > 0 && /[A-Za-z]/.test(merged[merged.length - 1]);
+    if (isNumericContinuation && priorHasLetters) {
+      merged[merged.length - 1] += ' ' + line;
+    } else {
+      merged.push(line);
+    }
+  }
+  return merged;
 }
 
 type LineExtraction = {
@@ -205,11 +224,21 @@ type LineExtraction = {
 //   C) "<vendor> facture XXX"              — single trigger
 // Falls back to last-token-looks-like-invoice, else returns vendor-only.
 export function extractFromLine(line: string): LineExtraction {
-  // Collapse standalone hyphens between words (e.g. "facture - 440") so the
-  // trigger-based regex below sees "facture 440" and lands on the ID. Hyphens
-  // inside tokens (F-486, CA6V-FNK) are not affected because they have no
-  // surrounding spaces.
-  const cleaned = stripPrefixCodes(line).replace(/\s-\s/g, ' ');
+  // Three pre-cleanup passes before the pattern regexes run:
+  //   1. Collapse standalone hyphens ("facture - 440") so trigger lookahead
+  //      lands on the ID, not '-'.
+  //   2. Replace U+2212 MINUS SIGN with ASCII hyphen — the budget sometimes
+  //      contains "Rona F-44020−14095171" (auto-correct or copy from a web
+  //      page); the F-id character class only allows ASCII '-'.
+  //   3. Strip attachment-file extensions (".pdf", ".jpg", etc.) from the
+  //      captured ID so QBO search uses bare "F-202229050" instead of
+  //      "F-202229050.pdf". The extension is the user's signal — preserved
+  //      in the raw row by rowHasAttachmentFile — that the budget already
+  //      has the supplier file attached; it must not be in the docNumber.
+  const cleaned = stripPrefixCodes(line)
+    .replace(/\s-\s/g, ' ')
+    .replace(/−/g, '-')
+    .replace(/\.(pdf|jpe?g|png|heic|tiff?|gif|webp)\b/gi, '');
   if (!cleaned) return { invoices: [] };
   if (looksLikePayrollPeriod(cleaned)) return { invoices: [] };
 
@@ -250,6 +279,19 @@ export function extractFromLine(line: string): LineExtraction {
     const vendor = cleanVendor(cleaned.slice(0, factHits[0].index));
     const invoices = factHits.map((h) => h[1].trim());
     return { vendor: vendor || undefined, invoices };
+  }
+
+  // Multi-segment receipt without F- prefix ("The Home Depot 7146 00002 88787").
+  // Common when the user transcribes a Home Depot receipt without the F-
+  // token. Requires 2+ trailing numeric segments after the first to avoid
+  // over-matching "vendor 4501 4502" which is more likely two separate
+  // standalone invoices, not one composite ID.
+  const hdNoF = cleaned.match(/^(.+?)\s+(\d{3,}(?:\s+\d{2,}){2,5})\s*$/);
+  if (hdNoF) {
+    return {
+      vendor: cleanVendor(hdNoF[1]) || undefined,
+      invoices: [normalizeSpacedReceipt(hdNoF[2])],
+    };
   }
 
   const tail = cleaned.match(/^(.+?)\s+([A-Za-z0-9][A-Za-z0-9\-._/]*)\s*$/);
