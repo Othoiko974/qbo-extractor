@@ -40,7 +40,7 @@ export function Settings() {
     settings.naming_template ?? 'Depense_{num}_{fournisseur}_{date}_{montant}',
   );
   const [folderTemplate, setFolderTemplate] = useState(
-    settings.folder_template ?? '{year}-{month}',
+    settings.folder_template ?? '',
   );
   const [saved, setSaved] = useState<'idle' | 'saving' | 'ok'>('idle');
   const nameRef = useRef<HTMLInputElement>(null);

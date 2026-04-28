@@ -91,7 +91,7 @@ export class ExtractionEngine {
 
     const baseFolder = Settings.get('base_folder') ?? path.join(app.getPath('documents'), 'QBO Extracts');
     const template = Settings.get('naming_template') ?? 'Depense_{num}_{fournisseur}_{date}_{montant}';
-    const folderTemplate = Settings.get('folder_template') ?? '{year}-{month}';
+    const folderTemplate = Settings.get('folder_template') ?? '';
     const companyFolder = path.join(baseFolder, sanitizeFolder(company.label));
     fs.mkdirSync(companyFolder, { recursive: true });
 
@@ -540,7 +540,7 @@ export class ExtractionEngine {
 
     const baseFolder = Settings.get('base_folder') ?? path.join(app.getPath('documents'), 'QBO Extracts');
     const template = Settings.get('naming_template') ?? 'Depense_{num}_{fournisseur}_{date}_{montant}';
-    const folderTemplate = Settings.get('folder_template') ?? '{year}-{month}';
+    const folderTemplate = Settings.get('folder_template') ?? '';
     const companyFolder = run.folder ?? path.join(baseFolder, sanitizeFolder(company.label));
     fs.mkdirSync(companyFolder, { recursive: true });
 
@@ -699,31 +699,41 @@ export function buildSearchCandidates(
     out.push(t);
   };
 
-  push(docNumber);
-
+  // Tokenize the comment first so trigger-based hits ("facture 440") can be
+  // prioritized over the docNumber column. Refacturation rows put the
+  // re-billing number in column B and the supplier's original invoice
+  // number after "facture" in the comment; without comment-first priority
+  // the engine breaks on the (PJ-less) re-billing match and never tries
+  // the supplier's actual invoice.
+  const triggerHits: string[] = [];
+  const alphaHits: string[] = [];
   if (comment) {
-    // Split on common separators. Keep hyphens within tokens (F-486).
+    // Collapse standalone hyphens (e.g. "facture - 440") so the trigger
+    // lookahead lands on the ID, not '-'. Hyphens inside tokens (F-486)
+    // are preserved by the splitting regex.
     const tokens = comment
+      .replace(/\s-\s/g, ' ')
       .split(/[\s,;:/()\[\]]+/)
       .map((t) => t.trim())
       .filter(Boolean);
 
-    // Pass 1: tokens immediately following "facture" or "fact." or "#" or "no".
     const triggers = new Set(['facture', 'factures', 'fact', 'fact.', '#', 'no', 'n°', 'numéro']);
     for (let i = 0; i < tokens.length - 1; i++) {
       if (triggers.has(tokens[i].toLowerCase().replace(/\.$/, ''))) {
-        if (looksLikeInvoiceId(tokens[i + 1])) push(tokens[i + 1]);
+        if (looksLikeInvoiceId(tokens[i + 1])) triggerHits.push(tokens[i + 1]);
       }
     }
 
-    // Pass 2: any remaining alphanumeric tokens that look like invoice IDs.
     for (const t of tokens) {
-      if (looksLikeInvoiceId(t) && !isSheetOrBuildingCode(t)) push(t);
+      if (looksLikeInvoiceId(t) && !isSheetOrBuildingCode(t)) alphaHits.push(t);
     }
   }
 
-  // Last resort: the original Excel "N°" column, in case our comment override
-  // guessed wrong and the Excel number was actually the QBO DocNumber.
+  // Priority: trigger-tagged comment IDs first, then docNumber column,
+  // then other comment tokens, then rawDocNumber as last resort.
+  for (const t of triggerHits) push(t);
+  push(docNumber);
+  for (const t of alphaHits) push(t);
   push(rawDocNumber);
 
   return out;
