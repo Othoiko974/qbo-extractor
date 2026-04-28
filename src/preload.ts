@@ -216,6 +216,8 @@ const api = {
   }) => ipcRenderer.invoke('extraction:resolveCandidate', args),
   dismissCandidates: (runRowId: string) =>
     ipcRenderer.invoke('extraction:dismissCandidates', runRowId),
+  rejectAmbiguous: (runRowId: string, rowId: string) =>
+    ipcRenderer.invoke('extraction:rejectAmbiguous', { runRowId, rowId }),
 
   // Filesystem
   openFolder: (p: string) => ipcRenderer.invoke('fs:openFolder', p),

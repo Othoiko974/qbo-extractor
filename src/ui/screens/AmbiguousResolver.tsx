@@ -52,10 +52,13 @@ export function AmbiguousResolver() {
     void resolveCandidate(picked.txnId, picked.txnType);
   };
 
-  const dismiss = async () => {
+  // Explicit reject — user reviewed all candidates and none matches.
+  // Marks the row as 'nf' so it leaves the Ambigus tab and lands in
+  // Non trouvés. Esc / "Retour" still close without changing status.
+  const reject = async () => {
     if (row.runRowId) {
       try {
-        await window.qboApi.dismissCandidates(row.runRowId);
+        await window.qboApi.rejectAmbiguous(row.runRowId, row.id);
       } catch {
         /* ignore */
       }
@@ -102,7 +105,7 @@ export function AmbiguousResolver() {
     },
     {
       key: 'Escape',
-      handler: () => void dismiss(),
+      handler: () => closeResolver(),
       evenInInput: true,
       label: t('shortcuts.resolver.dismiss'),
       group: t('shortcuts.group.actions'),
@@ -227,8 +230,8 @@ export function AmbiguousResolver() {
               marginTop: 24,
             }}
           >
-            <button className="btn" onClick={dismiss} disabled={resolverLoading}>
-              {t('resolver.dismiss')}
+            <button className="btn" onClick={reject} disabled={resolverLoading}>
+              {t('resolver.no_match')}
             </button>
             <button
               className="btn btn-primary"

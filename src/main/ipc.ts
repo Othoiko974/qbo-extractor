@@ -642,6 +642,29 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     return { ok: true };
   });
 
+  // User reviewed all candidates in the resolver and decided none of them
+  // matches the budget row. Mark the row as 'nf' so it leaves the Ambigus
+  // tab, clear the captured candidates, and notify the renderer.
+  ipcMain.handle(
+    'extraction:rejectAmbiguous',
+    async (_evt, args: { runRowId: string; rowId: string }) => {
+      RunRows.updateStatus(args.runRowId, {
+        status: 'nf',
+        error: 'Rejeté manuellement : aucune correspondance dans QBO.',
+      });
+      RunRowCandidates.deleteByRow(args.runRowId);
+      const wc = getMainWindow()?.webContents;
+      wc?.send('extraction:update', {
+        runId: '',
+        rowId: args.rowId,
+        runRowId: args.runRowId,
+        status: 'nf',
+        counts: { ok: 0, amb: 0, nf: 0, nopj: 0, total: 0, done: 0 },
+      });
+      return { ok: true };
+    },
+  );
+
   ipcMain.handle(
     'companies:setEntityAliases',
     async (_evt, key: string, aliases: string[]) => {
