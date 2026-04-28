@@ -163,14 +163,19 @@ export function AmbiguousResolver() {
           </button>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 15, fontWeight: 600, lineHeight: 1.3 }}>
-              {t('resolver.title', { num: row.docNumber })}
+              {t(
+                resolverCandidates.length === 1 ? 'resolver.title_one' : 'resolver.title',
+                { num: row.docNumber },
+              )}
             </div>
             <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-              {t('resolver.subtitle', {
-                n: resolverCandidates.length,
-                s: resolverCandidates.length > 1 ? 's' : '',
-                s2: resolverCandidates.length > 1 ? 'nt' : '',
-              })}
+              {resolverCandidates.length === 1
+                ? t('resolver.subtitle_one')
+                : t('resolver.subtitle', {
+                    n: resolverCandidates.length,
+                    s: 's',
+                    s2: 'nt',
+                  })}
             </div>
           </div>
           <span
