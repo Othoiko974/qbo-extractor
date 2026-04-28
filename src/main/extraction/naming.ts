@@ -18,10 +18,14 @@ function sanitize(s: string): string {
 
 function fmtAmount(n: number): string {
   if (!Number.isFinite(n)) return '0';
-  return n
-    .toFixed(2)
-    .replace(/\.?0+$/, (m) => (m === '.00' ? '' : m))
-    .replace('.', ',');
+  // US-style formatting: comma thousands separator, period decimal —
+  // "$4,507.03" instead of "$4507,03". Round dollars stay terse: $4,507
+  // (the .00 is stripped) while non-round preserve the cents.
+  const s = n.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return s.replace(/\.00$/, '');
 }
 
 export function applyTemplate(template: string, vars: NamingVars): string {
