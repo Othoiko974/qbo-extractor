@@ -33,7 +33,11 @@ jobs:
 
       - name: Make (Mac)
         if: matrix.os == 'macos-latest'
-        run: npm run make -- --arch=universal
+        # arm64 only for v1 — universal build fails to stitch because
+        # better-sqlite3 emits arch-asymmetric files (test_extension.node
+        # on x64, _CodeSignature on arm64). Add a separate x64 matrix
+        # entry later if Intel-Mac staff needs it.
+        run: npm run make -- --arch=arm64
         env:
           # Code signing is deferred to v2. Empty so Electron Forge skips signing.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
