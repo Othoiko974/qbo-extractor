@@ -60,7 +60,43 @@ function parseAmount(v: unknown): number | null {
   let s = String(v).replace(/\s/g, '').replace(/[$€£]/g, '');
   const neg = /^\((.+)\)$/.test(s);
   if (neg) s = s.replace(/^\(|\)$/g, '');
-  s = s.replace(/,/g, '.');
+
+  // Locale-aware separator handling — different sheets use different
+  // formats:
+  //   "3 920,00"   French  → 3920 (space thousands, comma decimal)
+  //   "3,920.00"   US      → 3920 (comma thousands, dot decimal)
+  //   "3.920,00"   EU      → 3920 (dot thousands, comma decimal)
+  //   "3920.00" / "3920,00" — single separator, decimal
+  // The naïve replace-comma-with-dot turns "3,920.00" into "3.920.00",
+  // parseFloat stops at the second dot and returns 3.92 (off by 1000).
+  const hasComma = s.includes(',');
+  const hasDot = s.includes('.');
+  if (hasComma && hasDot) {
+    // The LAST one is the decimal separator; strip the other as thousands.
+    if (s.lastIndexOf(',') > s.lastIndexOf('.')) {
+      s = s.replace(/\./g, '').replace(',', '.');
+    } else {
+      s = s.replace(/,/g, '');
+    }
+  } else if (hasComma) {
+    // Only commas. "3,920" with exactly 3 digits after the lone comma
+    // looks like US thousands (the cents are absent); "3,92" is French
+    // decimal. Multiple commas = thousands grouping.
+    const parts = s.split(',');
+    const looksLikeUsThousands =
+      parts.length === 2 && /^\d+$/.test(parts[0]) && /^\d{3}$/.test(parts[1]);
+    if (looksLikeUsThousands || parts.length > 2) {
+      s = s.replace(/,/g, '');
+    } else {
+      s = s.replace(/,/g, '.');
+    }
+  } else if (hasDot) {
+    // Only dots. Multiple = European thousands (3.920.000); single = decimal.
+    if ((s.match(/\./g) || []).length > 1) {
+      s = s.replace(/\./g, '');
+    }
+  }
+
   const n = parseFloat(s);
   if (isNaN(n)) return null;
   return neg ? -n : n;
