@@ -54,6 +54,15 @@ type Store = {
   resolverLoading: boolean;
   resolverError: string | null;
 
+  // Sliding-window of timestamps for QBO API requests (one entry per Intuit
+  // /v3 hit; signed-URL CDN downloads are filtered upstream). Lives at the
+  // store level so the cadence chip on Extraction stays accurate across
+  // run boundaries AND screen navigation — Intuit's 500/min/realm rate
+  // limit is server-side over a rolling 60 s window, so a fresh local
+  // count would under-report the budget when relaunching within the minute.
+  qboRequestTimes: number[];
+  pushQboRequestTime: (ts: number) => void;
+
   setScreen: (s: Screen) => void;
   openPreview: (filePath: string) => void;
   openResolver: (rowId: string) => Promise<void>;
@@ -96,6 +105,15 @@ export const useStore = create<Store>((set, get) => ({
   resolverCandidates: [],
   resolverLoading: false,
   resolverError: null,
+  qboRequestTimes: [],
+
+  pushQboRequestTime: (ts) =>
+    set((s) => {
+      const cutoff = Date.now() - 60_000;
+      const next = s.qboRequestTimes.filter((t) => t > cutoff);
+      next.push(ts);
+      return { qboRequestTimes: next };
+    }),
 
   setScreen: (screen) => set({ screen }),
   openPreview: (filePath) => set({ previewFilePath: filePath, screen: 'preview' }),
@@ -293,5 +311,10 @@ export function initStore() {
   void store.loadSettings();
   window.qboApi.onExtractionUpdate((u) => {
     useStore.getState().applyUpdate(u as ExtractionUpdate);
+  });
+  // Subscribe at app boot so the cadence chip survives screen unmounts and
+  // run boundaries — needed to honor Intuit's rolling-60 s rate limit.
+  window.qboApi.onQboRequest((evt) => {
+    useStore.getState().pushQboRequestTime(evt.ts);
   });
 }

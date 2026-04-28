@@ -90,22 +90,28 @@ export function Extraction({ onOpenReview }: { onOpenReview: () => void }) {
   const startRef = useRef<number | null>(null);
   const pausedAtRef = useRef<number | null>(null);
   const pausedTotalRef = useRef(0);
-  const reqTimesRef = useRef<number[]>([]);
+  const qboRequestTimes = useStore((s) => s.qboRequestTimes);
 
-  // 1 Hz clock so ETA / Elapsed / Cadence numbers stay live.
+  // 1 Hz clock so ETA / Elapsed / Cadence numbers stay live. Always on,
+  // regardless of run state, so the cadence chip ages out entries within
+  // the rolling 60 s window even between runs (otherwise a finished
+  // extraction would freeze its req/min count until the next launch).
   useEffect(() => {
-    if (!running || paused) return;
     const id = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(id);
-  }, [running, paused]);
+  }, []);
 
-  // Run-boundary bookkeeping: capture the start, accumulate paused time,
-  // reset when a fresh run begins.
+  // Run-boundary bookkeeping: capture the start, accumulate paused time.
+  // The cadence array (reqTimesRef) intentionally is NOT cleared here —
+  // QBO's rate limit (500 req/min/realm) is enforced server-side over a
+  // rolling 60s window, so back-to-back runs share that window. Wiping
+  // the local count on run start would under-report the budget for the
+  // first ~minute of a follow-up run. The sliding-window prune below
+  // ages out entries naturally.
   useEffect(() => {
     if (running && startRef.current === null) {
       startRef.current = Date.now();
       pausedTotalRef.current = 0;
-      reqTimesRef.current = [];
     }
     if (!running && pausedAtRef.current !== null) {
       pausedTotalRef.current += Date.now() - pausedAtRef.current;
@@ -122,18 +128,8 @@ export function Extraction({ onOpenReview }: { onOpenReview: () => void }) {
     }
   }, [paused]);
 
-  // Subscribe to every QBO HTTP request emitted by the main process and
-  // push its timestamp into the sliding window. Stays subscribed for the
-  // lifetime of the screen so the cadence keeps updating between runs
-  // (e.g. ping during connect, manual ambiguous resolution, etc).
-  useEffect(() => {
-    return window.qboApi.onQboRequest((evt) => {
-      reqTimesRef.current.push(evt.ts);
-      // Force a render so the chip refreshes immediately, not just at the
-      // 1 Hz tick — extraction runs can burst through 4+ calls in a row.
-      setTick((n) => n + 1);
-    });
-  }, []);
+  // Cadence subscription lives in the store (initStore) — the array is
+  // shared so it persists across screen mounts and run boundaries.
 
   const elapsedMs = (() => {
     if (startRef.current === null) return 0;
@@ -148,12 +144,10 @@ export function Extraction({ onOpenReview }: { onOpenReview: () => void }) {
   const remaining = Math.max(0, total - done);
   const etaMs = avgPerRowMs > 0 && remaining > 0 ? remaining * avgPerRowMs : 0;
 
-  // Drop entries older than 60 s, then the length is the actual req/min.
-  const NOW = Date.now();
-  while (reqTimesRef.current.length > 0 && NOW - reqTimesRef.current[0] > 60_000) {
-    reqTimesRef.current.shift();
-  }
-  const reqPerMin = reqTimesRef.current.length;
+  // Real req/min in the rolling 60 s window. Computed live on every render
+  // so the chip ages out entries between runs (the 1 Hz tick re-fires this).
+  const cutoff = Date.now() - 60_000;
+  const reqPerMin = qboRequestTimes.filter((t) => t > cutoff).length;
   void tick;
 
   // Space toggles pause / resume while a run is active. Esc requests stop
