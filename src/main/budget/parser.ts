@@ -205,7 +205,11 @@ type LineExtraction = {
 //   C) "<vendor> facture XXX"              — single trigger
 // Falls back to last-token-looks-like-invoice, else returns vendor-only.
 export function extractFromLine(line: string): LineExtraction {
-  const cleaned = stripPrefixCodes(line);
+  // Collapse standalone hyphens between words (e.g. "facture - 440") so the
+  // trigger-based regex below sees "facture 440" and lands on the ID. Hyphens
+  // inside tokens (F-486, CA6V-FNK) are not affected because they have no
+  // surrounding spaces.
+  const cleaned = stripPrefixCodes(line).replace(/\s-\s/g, ' ');
   if (!cleaned) return { invoices: [] };
   if (looksLikePayrollPeriod(cleaned)) return { invoices: [] };
 
