@@ -105,7 +105,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     'extraction.eta_title': 'Estimation du temps restant',
     'extraction.rate': 'Cadence',
     'extraction.rate_title':
-      "Requêtes HTTP réelles vers l'API QuickBooks v3 dans la dernière minute. Limite Intuit : 500/min en production, 100/min en sandbox. Devient orange à 250, rouge à 400.",
+      "Requêtes HTTP réelles vers l'API QuickBooks v3 dans la dernière minute. Limite Intuit : 500/min en production, 100/min en sandbox. Devient orange à 350, rouge à 450.",
+    'extraction.rate_limit_warn': 'Limite QBO',
+    'extraction.rate_limit_warn_title':
+      "Tu approches de la limite Intuit (500 req/min/realm). Au-delà, l'API renvoie HTTP 429 et les lignes en cours échouent. Pause l'extraction quelques secondes pour laisser la fenêtre glissante se vider.",
     'extraction.stop_confirm':
       "Arrêter l'extraction en cours ? Les lignes non encore traitées seront laissées en file d'attente.",
     'extraction.amount_split_child':
@@ -405,7 +408,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     'extraction.eta_title': 'Estimated remaining time',
     'extraction.rate': 'Rate',
     'extraction.rate_title':
-      'Real HTTP requests to the QuickBooks v3 API in the last minute. Intuit limit: 500/min in production, 100/min in sandbox. Turns orange at 250, red at 400.',
+      'Real HTTP requests to the QuickBooks v3 API in the last minute. Intuit limit: 500/min in production, 100/min in sandbox. Turns orange at 350, red at 450.',
+    'extraction.rate_limit_warn': 'QBO limit',
+    'extraction.rate_limit_warn_title':
+      'You\'re close to Intuit\'s limit (500 req/min/realm). Past it the API returns HTTP 429 and in-flight rows fail. Pause extraction for a few seconds to let the rolling window drain.',
     'extraction.stop_confirm':
       'Stop the running extraction? Pending rows will be left in the queue.',
     'extraction.amount_split_child':

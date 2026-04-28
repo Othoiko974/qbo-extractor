@@ -253,16 +253,32 @@ export function Extraction({ onOpenReview }: { onOpenReview: () => void }) {
                   className="mono"
                   style={{
                     color:
-                      reqPerMin >= 400
+                      reqPerMin >= 450
                         ? 'var(--err)'
-                        : reqPerMin >= 250
+                        : reqPerMin >= 350
                           ? 'var(--warn)'
                           : 'var(--ink)',
                     fontWeight: 500,
                   }}
                 >
-                  {reqPerMin} req/min
+                  {reqPerMin} / 500 req/min
                 </span>
+                {reqPerMin >= 450 && (
+                  <span
+                    style={{
+                      marginLeft: 8,
+                      padding: '2px 8px',
+                      borderRadius: 8,
+                      background: 'var(--err)',
+                      color: '#fff',
+                      fontSize: 11,
+                      fontWeight: 600,
+                    }}
+                    title={t('extraction.rate_limit_warn_title')}
+                  >
+                    ⚠ {t('extraction.rate_limit_warn')}
+                  </span>
+                )}
               </span>
             </>
           )}
