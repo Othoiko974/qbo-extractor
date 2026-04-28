@@ -7,6 +7,7 @@ import type {
   Screen,
   VendorCluster,
   RunRowCandidate,
+  SisterCandidate,
 } from '../types/domain';
 
 // Backend-shaped company (more fields than the UI type).
@@ -53,6 +54,12 @@ type Store = {
   resolverCandidates: RunRowCandidate[];
   resolverLoading: boolean;
   resolverError: string | null;
+  // Sister-company candidates loaded on demand via the resolver's
+  // "Chercher dans les autres compagnies" button. Empty until the user
+  // triggers the search; lives in memory only (not persisted to DB).
+  resolverSisterCandidates: SisterCandidate[];
+  resolverSisterLoading: boolean;
+  resolverSisterSearched: boolean;
 
   // Sliding-window of timestamps for QBO API requests (one entry per Intuit
   // /v3 hit; signed-URL CDN downloads are filtered upstream). Lives at the
@@ -67,7 +74,12 @@ type Store = {
   openPreview: (filePath: string) => void;
   openResolver: (rowId: string) => Promise<void>;
   closeResolver: () => void;
-  resolveCandidate: (txnId: string, txnType: 'Bill' | 'Purchase' | 'Invoice') => Promise<void>;
+  resolveCandidate: (
+    txnId: string,
+    txnType: 'Bill' | 'Purchase' | 'Invoice',
+    fetchFromCompanyKey?: string,
+  ) => Promise<void>;
+  searchInSisters: () => Promise<void>;
   setActiveCompany: (k: string | null) => void;
   dismissClusters: () => void;
   confirmClusters: (entries: { rawName: string; canonicalName: string }[]) => Promise<void>;
@@ -105,6 +117,9 @@ export const useStore = create<Store>((set, get) => ({
   resolverCandidates: [],
   resolverLoading: false,
   resolverError: null,
+  resolverSisterCandidates: [],
+  resolverSisterLoading: false,
+  resolverSisterSearched: false,
   qboRequestTimes: [],
 
   pushQboRequestTime: (ts) =>
@@ -128,6 +143,9 @@ export const useStore = create<Store>((set, get) => ({
       resolverCandidates: [],
       resolverLoading: true,
       resolverError: null,
+      resolverSisterCandidates: [],
+      resolverSisterLoading: false,
+      resolverSisterSearched: false,
       screen: 'resolver',
     });
     try {
@@ -140,8 +158,17 @@ export const useStore = create<Store>((set, get) => ({
       });
     }
   },
-  closeResolver: () => set({ resolverRowId: null, resolverCandidates: [], resolverError: null, screen: 'review' }),
-  resolveCandidate: async (txnId, txnType) => {
+  closeResolver: () =>
+    set({
+      resolverRowId: null,
+      resolverCandidates: [],
+      resolverError: null,
+      resolverSisterCandidates: [],
+      resolverSisterLoading: false,
+      resolverSisterSearched: false,
+      screen: 'review',
+    }),
+  resolveCandidate: async (txnId, txnType, fetchFromCompanyKey) => {
     const state = get();
     const rowId = state.resolverRowId;
     const companyKey = state.activeCompanyKey;
@@ -154,6 +181,7 @@ export const useStore = create<Store>((set, get) => ({
       txnId,
       txnType,
       companyKey,
+      fetchFromCompanyKey,
     })) as { ok: boolean; status?: ExtractionStatus; filePath?: string; error?: string };
     if (!res.ok) {
       set({ resolverLoading: false, resolverError: res.error ?? 'Échec du téléchargement.' });
@@ -163,8 +191,44 @@ export const useStore = create<Store>((set, get) => ({
       resolverLoading: false,
       resolverRowId: null,
       resolverCandidates: [],
+      resolverSisterCandidates: [],
+      resolverSisterLoading: false,
+      resolverSisterSearched: false,
       screen: 'review',
     });
+  },
+  searchInSisters: async () => {
+    const state = get();
+    const rowId = state.resolverRowId;
+    const companyKey = state.activeCompanyKey;
+    const row = state.extraction.find((r) => r.id === rowId);
+    if (!rowId || !row || !companyKey) return;
+    set({ resolverSisterLoading: true, resolverError: null });
+    try {
+      const res = (await window.qboApi.searchInSisters(
+        companyKey,
+        row.docNumber,
+      )) as { ok: boolean; results?: SisterCandidate[]; error?: string };
+      if (!res.ok) {
+        set({
+          resolverSisterLoading: false,
+          resolverSisterSearched: true,
+          resolverError: res.error ?? 'Échec de la recherche dans les autres compagnies.',
+        });
+        return;
+      }
+      set({
+        resolverSisterCandidates: res.results ?? [],
+        resolverSisterLoading: false,
+        resolverSisterSearched: true,
+      });
+    } catch (err) {
+      set({
+        resolverSisterLoading: false,
+        resolverSisterSearched: true,
+        resolverError: err instanceof Error ? err.message : String(err),
+      });
+    }
   },
   dismissClusters: () => set({ pendingClusters: [] }),
   confirmClusters: async (entries) => {

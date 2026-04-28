@@ -29,7 +29,7 @@ import type { sheets_v4 } from 'googleapis';
 import { readExcelBudget } from './budget/excel';
 import { normalizeVendors } from './budget/normalize';
 import { ExtractionEngine } from './extraction/engine';
-import { onQboRequest } from './qbo/client';
+import { onQboRequest, QboClient } from './qbo/client';
 
 export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
   const engine = new ExtractionEngine(() => getMainWindow()?.webContents ?? null);
@@ -597,7 +597,9 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
 
   // The user picked one candidate — download its attachment, mark the row
   // resolved, and emit an extraction:update so the renderer reflects it
-  // without a full reload.
+  // without a full reload. fetchFromCompanyKey overrides which QBO realm
+  // to download from (cross-company refacturation: row in TDL's run,
+  // supplier Bill in Altitude's books).
   ipcMain.handle(
     'extraction:resolveCandidate',
     async (
@@ -608,6 +610,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
         txnId: string;
         txnType: 'Bill' | 'Purchase' | 'Invoice';
         companyKey: string;
+        fetchFromCompanyKey?: string;
       },
     ) => {
       const cached = BudgetCache.get(args.companyKey);
@@ -619,6 +622,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
         txnId: args.txnId,
         txnType: args.txnType,
         row,
+        fetchFromCompanyKey: args.fetchFromCompanyKey,
       });
       if (!res.ok) return res;
       // Notify renderer to update the in-memory ExtractionRow.
@@ -641,6 +645,74 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     RunRowCandidates.deleteByRow(runRowId);
     return { ok: true };
   });
+
+  // Cross-company candidate search: when a row's active-company candidates
+  // include only the re-billing imputation (Invoice without PJ) but the
+  // supplier facture lives in a sister company's books (refacturation
+  // pattern: bought under Altitude, billed to TDL), the user can ask the
+  // resolver to query every other connected QBO realm for the same
+  // DocNumber. User-triggered so it doesn't multiply the per-row API
+  // budget on the run loop.
+  ipcMain.handle(
+    'qbo:searchInSisters',
+    async (_evt, args: { activeCompanyKey: string; docNumber: string }) => {
+      const sisters = Companies.list().filter(
+        (c) => c.key !== args.activeCompanyKey && !!c.qbo_realm_id && c.qbo_connected === 1,
+      );
+      const out: Array<{
+        companyKey: string;
+        companyLabel: string;
+        txnId: string;
+        txnType: 'Bill' | 'Purchase' | 'Invoice';
+        vendorName: string | null;
+        txnDate: string | null;
+        totalAmount: number | null;
+        docNumber: string | null;
+        attachableCount: number;
+        attachableKinds: string[];
+      }> = [];
+      for (const sister of sisters) {
+        const token = await Secrets.getQbo(sister.key);
+        if (!token) continue;
+        try {
+          const client = new QboClient(sister.key, sister.qbo_realm_id!, sister.qbo_env);
+          const hits = await client.searchByDocNumber(args.docNumber);
+          const top = hits.slice(0, 8);
+          const enriched = await Promise.all(
+            top.map(async (h) => {
+              try {
+                const atts = await client.getAttachables(h.Id, h._type);
+                const kinds = atts
+                  .map((a) => sniffExtKind(a.FileName, a.ContentType))
+                  .filter(Boolean) as string[];
+                return { hit: h, count: atts.length, kinds };
+              } catch {
+                return { hit: h, count: 0, kinds: [] as string[] };
+              }
+            }),
+          );
+          for (const e of enriched) {
+            out.push({
+              companyKey: sister.key,
+              companyLabel: sister.label,
+              txnId: e.hit.Id,
+              txnType: e.hit._type,
+              vendorName: e.hit._partyName ?? null,
+              txnDate: e.hit.TxnDate ?? null,
+              totalAmount: typeof e.hit.TotalAmt === 'number' ? e.hit.TotalAmt : null,
+              docNumber: e.hit.DocNumber ?? null,
+              attachableCount: e.count,
+              attachableKinds: e.kinds,
+            });
+          }
+        } catch {
+          // Token expired, network error, etc. — skip this sister without
+          // failing the whole search; user still benefits from the others.
+        }
+      }
+      return { ok: true, results: out };
+    },
+  );
 
   // User reviewed all candidates in the resolver and decided none of them
   // matches the budget row. Mark the row as 'nf' so it leaves the Ambigus
@@ -791,6 +863,24 @@ function toClientCompany(c: ReturnType<typeof Companies.get> & object) {
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+// Coarse "kind" tag for an attachable so the resolver UI can stack thumbs
+// without downloading. Mirrors the local helper in extraction/engine.ts —
+// kept inline to avoid widening engine's exported surface.
+function sniffExtKind(fileName: string | undefined, contentType: string | undefined): string | null {
+  const candidates = [fileName, contentType].filter(Boolean) as string[];
+  for (const s of candidates) {
+    const lower = s.toLowerCase();
+    if (lower.includes('pdf')) return 'pdf';
+    if (lower.includes('jpeg') || lower.includes('jpg')) return 'jpg';
+    if (lower.includes('png')) return 'png';
+    if (lower.includes('heic')) return 'heic';
+    if (lower.includes('tiff')) return 'tiff';
+    if (lower.includes('gif')) return 'gif';
+    if (lower.includes('webp')) return 'webp';
+  }
+  return null;
 }
 
 function safeJsonArray(s: string | null | undefined): string[] {

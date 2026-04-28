@@ -213,11 +213,14 @@ const api = {
     txnId: string;
     txnType: 'Bill' | 'Purchase' | 'Invoice';
     companyKey: string;
+    fetchFromCompanyKey?: string;
   }) => ipcRenderer.invoke('extraction:resolveCandidate', args),
   dismissCandidates: (runRowId: string) =>
     ipcRenderer.invoke('extraction:dismissCandidates', runRowId),
   rejectAmbiguous: (runRowId: string, rowId: string) =>
     ipcRenderer.invoke('extraction:rejectAmbiguous', { runRowId, rowId }),
+  searchInSisters: (activeCompanyKey: string, docNumber: string) =>
+    ipcRenderer.invoke('qbo:searchInSisters', { activeCompanyKey, docNumber }),
 
   // Filesystem
   openFolder: (p: string) => ipcRenderer.invoke('fs:openFolder', p),

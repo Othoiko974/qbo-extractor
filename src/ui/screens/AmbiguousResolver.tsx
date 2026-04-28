@@ -1,7 +1,7 @@
 import React from 'react';
 import { useStore } from '../../store/store';
 import { Icon, fmtCurrency } from '../Icon';
-import type { RunRowCandidate } from '../../types/domain';
+import type { RunRowCandidate, SisterCandidate } from '../../types/domain';
 import { t, useLang } from '../../i18n';
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
 import { qboTxnUrl } from '../../shared/qbo-url';
@@ -17,13 +17,30 @@ export function AmbiguousResolver() {
     resolverCandidates,
     resolverLoading,
     resolverError,
+    resolverSisterCandidates,
+    resolverSisterLoading,
+    resolverSisterSearched,
     extraction,
+    activeCompanyKey,
+    companies,
     closeResolver,
     resolveCandidate,
+    searchInSisters,
   } = useStore();
 
   const row = extraction.find((r) => r.id === resolverRowId);
-  const [picked, setPicked] = React.useState<{ txnId: string; txnType: 'Bill' | 'Purchase' | 'Invoice' } | null>(null);
+  // picked carries the optional sister companyKey so submit() can route
+  // the resolve to the right QBO realm. undefined fetchFromCompanyKey =
+  // active company (regular candidate).
+  const [picked, setPicked] = React.useState<{
+    txnId: string;
+    txnType: 'Bill' | 'Purchase' | 'Invoice';
+    fetchFromCompanyKey?: string;
+  } | null>(null);
+
+  const sisterCount = companies.filter(
+    (c) => c.key !== activeCompanyKey && !!c.qboRealmId && c.connected,
+  ).length;
 
   React.useEffect(() => {
     setPicked(null);
@@ -50,7 +67,7 @@ export function AmbiguousResolver() {
 
   const submit = () => {
     if (!picked) return;
-    void resolveCandidate(picked.txnId, picked.txnType);
+    void resolveCandidate(picked.txnId, picked.txnType, picked.fetchFromCompanyKey);
   };
 
   // Explicit reject — user reviewed all candidates and none matches.
@@ -216,7 +233,11 @@ export function AmbiguousResolver() {
             <CandidateCard
               key={c.id}
               candidate={c}
-              selected={picked?.txnId === c.txnId && picked.txnType === c.txnType}
+              selected={
+                picked?.txnId === c.txnId &&
+                picked.txnType === c.txnType &&
+                !picked.fetchFromCompanyKey
+              }
               onSelect={() =>
                 setPicked({
                   txnId: c.txnId,
@@ -227,7 +248,71 @@ export function AmbiguousResolver() {
           ))}
         </div>
 
-        {resolverCandidates.length > 0 && (
+        {sisterCount > 0 && (
+          <div style={{ marginTop: 18 }}>
+            {!resolverSisterSearched && (
+              <button
+                className="btn btn-sm"
+                onClick={() => void searchInSisters()}
+                disabled={resolverSisterLoading}
+                title={t('resolver.sister.search_title')}
+              >
+                {resolverSisterLoading
+                  ? t('resolver.sister.searching')
+                  : t('resolver.sister.search', { n: sisterCount })}
+              </button>
+            )}
+            {resolverSisterSearched && resolverSisterCandidates.length === 0 && (
+              <div
+                className="card-surface"
+                style={{ padding: 12, color: 'var(--muted)', fontSize: 12 }}
+              >
+                {t('resolver.sister.empty')}
+              </div>
+            )}
+            {resolverSisterCandidates.length > 0 && (
+              <>
+                <div
+                  className="muted"
+                  style={{
+                    fontSize: 10.5,
+                    marginTop: 6,
+                    marginBottom: 10,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.06em',
+                    fontWeight: 600,
+                  }}
+                >
+                  {t('resolver.sister.section_title', {
+                    n: resolverSisterCandidates.length,
+                  })}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {resolverSisterCandidates.map((c, i) => (
+                    <SisterCandidateCard
+                      key={`${c.companyKey}-${c.txnType}-${c.txnId}-${i}`}
+                      candidate={c}
+                      selected={
+                        picked?.txnId === c.txnId &&
+                        picked.txnType === c.txnType &&
+                        picked.fetchFromCompanyKey === c.companyKey
+                      }
+                      onSelect={() =>
+                        setPicked({
+                          txnId: c.txnId,
+                          txnType: c.txnType,
+                          fetchFromCompanyKey: c.companyKey,
+                        })
+                      }
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {(resolverCandidates.length > 0 || resolverSisterCandidates.length > 0) && (
           <div
             style={{
               display: 'flex',
@@ -339,6 +424,112 @@ function CandidateCard({
         onClick={(e) => {
           e.stopPropagation();
           void window.qboApi.openUrl(qboTxnUrl(candidate.txnId, candidate.txnType, realmId));
+        }}
+        style={{ flexShrink: 0 }}
+      >
+        <Icon name="external" size={12} />
+      </button>
+    </div>
+  );
+}
+
+// Mirror of CandidateCard for sister-company hits. Renders an extra
+// company badge so the user knows which set of QBO books the row would
+// be downloaded from, and uses the sister's realmId for the deep-link
+// (otherwise the browser would land on the same-id txn in the active
+// company's realm, which is wrong).
+function SisterCandidateCard({
+  candidate,
+  selected,
+  onSelect,
+}: {
+  candidate: SisterCandidate;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const sister = useStore((s) =>
+    s.companies.find((c) => c.key === candidate.companyKey),
+  );
+  const realmId = sister?.qboRealmId;
+  const typeChipClass =
+    candidate.txnType === 'Bill'
+      ? 'chip-info'
+      : candidate.txnType === 'Purchase'
+        ? 'chip-warn'
+        : '';
+
+  return (
+    <div
+      onClick={onSelect}
+      className="card-surface"
+      style={{
+        padding: 16,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        cursor: 'pointer',
+        borderColor: selected ? 'var(--accent)' : 'var(--line)',
+        borderWidth: selected ? 2 : 1,
+        margin: selected ? -1 : 0,
+      }}
+    >
+      <input
+        type="radio"
+        checked={selected}
+        onChange={onSelect}
+        style={{ flexShrink: 0, accentColor: 'var(--accent)' }}
+      />
+      <span
+        className="chip chip-accent"
+        style={{ flexShrink: 0, fontSize: 11, padding: '3px 10px', fontWeight: 600 }}
+        title={t('resolver.sister.from_company', { name: candidate.companyLabel })}
+      >
+        {candidate.companyLabel}
+      </span>
+      <span
+        className={`chip ${typeChipClass}`}
+        style={{ flexShrink: 0, fontSize: 11, padding: '3px 10px' }}
+      >
+        {candidate.txnType}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <span style={{ fontSize: 13.5, fontWeight: 600 }}>
+            {candidate.vendorName ?? '—'}
+          </span>
+          <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+            txnId {candidate.txnId}
+          </span>
+        </div>
+        <div
+          className="mono"
+          style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 4 }}
+        >
+          {candidate.txnDate ?? '—'} ·{' '}
+          {candidate.totalAmount != null
+            ? fmtCurrency(candidate.totalAmount)
+            : '—'}{' '}
+          ·{' '}
+          {candidate.attachableCount === 0
+            ? t('resolver.no_attachment')
+            : t('resolver.attachments', {
+                n: candidate.attachableCount,
+                s: candidate.attachableCount > 1 ? 's' : '',
+              })}
+        </div>
+      </div>
+      <ThumbnailStack
+        kinds={candidate.attachableKinds}
+        count={candidate.attachableCount}
+      />
+      <button
+        className="btn btn-ghost btn-icon"
+        title={t('resolver.open_qbo_txn')}
+        onClick={(e) => {
+          e.stopPropagation();
+          void window.qboApi.openUrl(
+            qboTxnUrl(candidate.txnId, candidate.txnType, realmId),
+          );
         }}
         style={{ flexShrink: 0 }}
       >

@@ -96,6 +96,24 @@ export type RunRowCandidate = {
   attachableKinds: string[];
 };
 
+// Candidate fetched live from a sister company's QBO realm via the
+// resolver's "Chercher dans les autres compagnies" action. Same shape
+// as a saved candidate but without an id (not persisted) and tagged
+// with which company it came from so the resolve step can override
+// the QBO source for the download.
+export type SisterCandidate = {
+  companyKey: string;
+  companyLabel: string;
+  txnId: string;
+  txnType: 'Bill' | 'Purchase' | 'Invoice';
+  vendorName: string | null;
+  txnDate: string | null;
+  totalAmount: number | null;
+  docNumber: string | null;
+  attachableCount: number;
+  attachableKinds: string[];
+};
+
 export type Screen =
   | 'onboarding'
   | 'dashboard'

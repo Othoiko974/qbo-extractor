@@ -519,6 +519,13 @@ export class ExtractionEngine {
     txnId: string;
     txnType: 'Bill' | 'Purchase' | 'Invoice';
     row: BudgetRow;
+    // Optional override: which company's QBO realm to fetch the txn /
+    // attachable from. Cross-company refacturation pattern — the row
+    // belongs to (e.g.) TDL but the supplier Bill with the original PJ
+    // lives in Altitude's books. The destination folder + naming still
+    // come from the run's own company so the file lands in the right
+    // place; only the QBO source is swapped.
+    fetchFromCompanyKey?: string;
   }): Promise<{
     ok: boolean;
     status?: ExtractionStatus;
@@ -531,20 +538,25 @@ export class ExtractionEngine {
     if (!runRow) return { ok: false, error: 'Ligne introuvable.' };
     const run = Runs.get(runRow.run_id);
     if (!run) return { ok: false, error: 'Run introuvable.' };
-    const company = Companies.get(run.company_key);
-    if (!company || !company.qbo_realm_id) {
-      return { ok: false, error: 'Entreprise / connexion QBO indisponible.' };
+    const runCompany = Companies.get(run.company_key);
+    if (!runCompany) {
+      return { ok: false, error: 'Entreprise du run introuvable.' };
     }
-    const token = await Secrets.getQbo(company.key);
-    if (!token) return { ok: false, error: 'Token QBO manquant.' };
+    const fetchKey = params.fetchFromCompanyKey ?? runCompany.key;
+    const fetchCompany = Companies.get(fetchKey);
+    if (!fetchCompany || !fetchCompany.qbo_realm_id) {
+      return { ok: false, error: 'Entreprise source / connexion QBO indisponible.' };
+    }
+    const token = await Secrets.getQbo(fetchCompany.key);
+    if (!token) return { ok: false, error: 'Token QBO manquant pour la compagnie source.' };
 
     const baseFolder = Settings.get('base_folder') ?? path.join(app.getPath('documents'), 'QBO Extracts');
     const template = Settings.get('naming_template') ?? 'Depense_{num}_{fournisseur}_{date}_{montant}';
     const folderTemplate = Settings.get('folder_template') ?? '';
-    const companyFolder = run.folder ?? path.join(baseFolder, sanitizeFolder(company.label));
+    const companyFolder = run.folder ?? path.join(baseFolder, sanitizeFolder(runCompany.label));
     fs.mkdirSync(companyFolder, { recursive: true });
 
-    const client = new QboClient(company.key, company.qbo_realm_id, company.qbo_env);
+    const client = new QboClient(fetchCompany.key, fetchCompany.qbo_realm_id, fetchCompany.qbo_env);
     const txn: QboBill = {
       Id: params.txnId,
       _type: params.txnType,
