@@ -58,6 +58,18 @@ export function Review() {
     void openResolver(r.id);
   };
 
+  // Bulk action — mark every amb row as "Aucune correspondance" (status=nf).
+  // Useful before re-running extraction with a fixed parser/engine: the user
+  // doesn't want to walk every amb row through the resolver only to reject it.
+  const bulkDismissAmb = async () => {
+    const ambRows = extraction.filter((r) => r.status === 'amb' && r.runRowId);
+    if (ambRows.length === 0) return;
+    if (!window.confirm(t('review.bulk_dismiss_confirm', { n: ambRows.length }))) return;
+    await Promise.allSettled(
+      ambRows.map((r) => window.qboApi.rejectAmbiguous(r.runRowId!, r.id)),
+    );
+  };
+
   // 1/2/3 → tab switch, Esc → back to extraction. Tabs map to the same
   // visual order as the chips above the table.
   useKeyboardShortcuts([
@@ -116,7 +128,7 @@ export function Review() {
       </div>
 
       <div className="content pad">
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
           {(['amb', 'nf', 'nopj'] as Tab[]).map((tk) => (
             <button
               key={tk}
@@ -127,6 +139,12 @@ export function Review() {
               {tabLabel[tk]} ({counts[tk]})
             </button>
           ))}
+          <div style={{ flex: 1 }} />
+          {tab === 'amb' && counts.amb > 0 && (
+            <button className="btn btn-sm" onClick={bulkDismissAmb}>
+              {t('review.bulk_dismiss', { n: counts.amb })}
+            </button>
+          )}
         </div>
 
         <div className="card-surface" style={{ overflowX: 'auto' }}>
