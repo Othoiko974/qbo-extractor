@@ -265,6 +265,84 @@ export function AmbiguousResolver() {
           </span>
         </header>
 
+        {/* Budget row context — what the user is actually looking for in QBO.
+            Without this they have to flip back to Review to remember the
+            vendor / amount / date that should match a candidate. */}
+        <div
+          className="card-surface"
+          style={{ padding: 14, marginBottom: 18, fontSize: 12.5 }}
+        >
+          <div
+            style={{
+              fontSize: 10.5,
+              color: 'var(--muted)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.06em',
+              fontWeight: 600,
+              marginBottom: 10,
+            }}
+          >
+            {t('resolver.row_info_title')}
+          </div>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'auto 1fr',
+              columnGap: 16,
+              rowGap: 6,
+            }}
+          >
+            <span className="muted">{t('review.col.vendor')}</span>
+            <span style={{ fontWeight: 500 }}>
+              {row.vendor || '—'}
+              {row.rawVendor && row.rawVendor !== row.vendor && (
+                <span
+                  className="muted"
+                  style={{ fontStyle: 'italic', marginLeft: 8, fontSize: 11 }}
+                >
+                  {t('review.brut_prefix')} : {row.rawVendor}
+                </span>
+              )}
+            </span>
+            <span className="muted">{t('review.col.amount')}</span>
+            <span className="mono" style={{ fontWeight: 500 }}>
+              {fmtCurrency(row.amount)}
+            </span>
+            <span className="muted">{t('review.col.date')}</span>
+            <span className="mono">{row.date || '—'}</span>
+            {row.bookingEntity && row.bookingEntity !== row.vendor && (
+              <>
+                <span className="muted">{t('review.col.entity')}</span>
+                <span>{row.bookingEntity}</span>
+              </>
+            )}
+            {row.building && (
+              <>
+                <span className="muted">{t('dashboard.col.building')}</span>
+                <span>{row.building}</span>
+              </>
+            )}
+            <span className="muted">{t('review.col.sheet')}</span>
+            <span>{row.sheet}</span>
+            {row.comment && (
+              <>
+                <span className="muted">{t('resolver.row_info_comment')}</span>
+                <span style={{ fontSize: 11.5, whiteSpace: 'pre-wrap' }}>
+                  {row.comment}
+                </span>
+              </>
+            )}
+            {row.rawDocNumber && row.rawDocNumber !== row.docNumber && (
+              <>
+                <span className="muted">{t('resolver.row_info_raw_num')}</span>
+                <span className="mono" style={{ fontSize: 11.5 }}>
+                  {row.rawDocNumber}
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+
         {resolverLoading && (
           <div className="card-surface" style={{ padding: 16, color: 'var(--muted)', fontSize: 12 }}>
             {t('resolver.loading')}

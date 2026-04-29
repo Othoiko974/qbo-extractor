@@ -167,6 +167,9 @@ const DICT: Record<Lang, Record<string, string>> = {
       "Refacturation interne (template QBO) — pas la facture d'origine du fournisseur.",
     'resolver.preview_refacturation_hint':
       "Détecté via la signature du template QBO French Canadian (\"Par chèque ou faire un dépôt direct au compte\" + nom de ta compagnie en émetteur). Si tu cherches le PDF supplier d'origine, essaie le bouton \"Chercher dans les autres compagnies\".",
+    'resolver.row_info_title': 'Recherche',
+    'resolver.row_info_comment': 'Commentaire',
+    'resolver.row_info_raw_num': 'N° brut (col. B)',
     'resolver.download': 'Télécharger la sélection',
     'resolver.downloading': 'Téléchargement…',
     'resolver.no_attachment': 'aucune pièce jointe',
@@ -484,6 +487,9 @@ const DICT: Record<Lang, Record<string, string>> = {
       'Internal re-billing (QBO template) — not the supplier\'s original invoice.',
     'resolver.preview_refacturation_hint':
       'Detected via the QBO French Canadian template signature ("Par chèque ou faire un dépôt direct au compte" + your company name as sender). If you\'re looking for the supplier PDF, try the "Search other companies" button.',
+    'resolver.row_info_title': 'Looking for',
+    'resolver.row_info_comment': 'Comment',
+    'resolver.row_info_raw_num': 'Raw # (col B)',
     'resolver.download': 'Download selection',
     'resolver.downloading': 'Downloading…',
     'resolver.no_attachment': 'no attachment',
