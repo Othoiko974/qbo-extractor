@@ -30,7 +30,11 @@ import { readExcelBudget } from './budget/excel';
 import { normalizeVendors } from './budget/normalize';
 import { ExtractionEngine } from './extraction/engine';
 import { onQboRequest, QboClient } from './qbo/client';
-import { PDFParse } from 'pdf-parse';
+// unpdf is a Node-native PDF text extractor (no DOMMatrix / browser DOM
+// dependency, unlike pdf-parse@2 → pdfjs-dist which crashes Electron's
+// main process at module load with "ReferenceError: DOMMatrix is not
+// defined"). Imported lazily so the bundled main starts without paying
+// the parse-time cost.
 
 export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
   const engine = new ExtractionEngine(() => getMainWindow()?.webContents ?? null);
@@ -688,9 +692,13 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
         if (ext === '.pdf') {
           try {
             const userCompanyLabels = Companies.list().map((c) => c.label);
-            const parser = new PDFParse({ data: dl.buffer });
-            const parsed = await parser.getText();
-            isRefacturation = looksLikeQboInternalInvoice(parsed.text, userCompanyLabels);
+            const { extractText, getDocumentProxy } = await import('unpdf');
+            const pdf = await getDocumentProxy(new Uint8Array(dl.buffer));
+            const { text } = await extractText(pdf, { mergePages: true });
+            isRefacturation = looksLikeQboInternalInvoice(
+              Array.isArray(text) ? text.join('\n') : text,
+              userCompanyLabels,
+            );
           } catch {
             // PDF parse failures are non-fatal — fall through with the file
             // displayed and no banner. Common cause: scanned PDFs without
