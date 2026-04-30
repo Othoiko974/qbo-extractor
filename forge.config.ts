@@ -100,6 +100,12 @@ const config: ForgeConfig = {
     // at package time, before code signing the application
     new FusesPlugin({
       version: FuseVersion.V1,
+      // FusesPlugin runs AFTER osxSign and rewrites bytes in the Electron
+      // binary; without re-applying the signature the bundle launches
+      // straight into "Code Signature Invalid" SIGKILL on macOS. This
+      // flag tells @electron/fuses to re-do the ad-hoc codesign on
+      // darwin runners after the fuse flip.
+      resetAdHocDarwinSignature: true,
       [FuseV1Options.RunAsNode]: false,
       [FuseV1Options.EnableCookieEncryption]: true,
       [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
