@@ -66,7 +66,12 @@ jobs:
           path: |
             out/make/**/*
           if-no-files-found: warn
-          retention-days: 14
+          # 3 days keeps the last 1-2 dev iterations queryable but bounds
+          # storage well under the free-plan quota. Tag a release
+          # (refs/tags/v*) for anything that should outlive that window —
+          # those are stored separately on the GitHub Release, not as
+          # transient artifacts.
+          retention-days: 3
 
   release:
     needs: build
