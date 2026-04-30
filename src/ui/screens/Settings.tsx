@@ -1,8 +1,8 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store/store';
 import { Icon } from '../Icon';
 import { t, useLang } from '../../i18n';
-import type { Company } from '../../types/domain';
+import type { Company, Project } from '../../types/domain';
 
 const NAMING_VARS: { key: string; desc: string }[] = [
   { key: '{num}', desc: 'N° de facture' },
@@ -273,6 +273,11 @@ export function Settings() {
             </div>
           )}
         </div>
+
+        <ProjectsSection
+          companies={companies}
+          onCompanyChanged={() => void loadCompanies()}
+        />
 
         <div className="card-surface" style={{ padding: 18 }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
@@ -552,6 +557,221 @@ function CompanyEditor({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Projects = top-level grouping that owns the budget config (gsheets
+// workbook / excel path) shared by every company that belongs to it.
+// This section gives the user a thin CRUD over them: rename, create,
+// reassign companies, delete (only when empty). The actual budget
+// config is still set via the Connect / GSheets screens — this UI
+// just manages the project records themselves.
+function ProjectsSection({
+  companies,
+  onCompanyChanged,
+}: {
+  companies: Company[];
+  onCompanyChanged: () => void;
+}) {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [newName, setNewName] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const reload = async () => {
+    const list = (await window.qboApi.projectsList()) as Project[];
+    setProjects(list);
+  };
+  useEffect(() => {
+    void reload();
+  }, []);
+
+  const create = async () => {
+    setError(null);
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    const res = (await window.qboApi.projectsCreate(trimmed)) as {
+      ok: boolean;
+      error?: string;
+    };
+    if (!res.ok) {
+      setError(res.error ?? 'Échec.');
+      return;
+    }
+    setNewName('');
+    await reload();
+  };
+
+  const rename = async (projectId: string, name: string) => {
+    setError(null);
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const res = (await window.qboApi.projectsRename(projectId, trimmed)) as {
+      ok: boolean;
+      error?: string;
+    };
+    if (!res.ok) setError(res.error ?? 'Échec.');
+    await reload();
+  };
+
+  const remove = async (projectId: string) => {
+    setError(null);
+    const res = (await window.qboApi.projectsDelete(projectId)) as {
+      ok: boolean;
+      error?: string;
+    };
+    if (!res.ok) {
+      setError(res.error ?? 'Échec.');
+      return;
+    }
+    await reload();
+  };
+
+  const setProject = async (companyKey: string, projectId: string) => {
+    setError(null);
+    await window.qboApi.companiesSetProject(companyKey, projectId);
+    onCompanyChanged();
+    await reload();
+  };
+
+  return (
+    <div className="card-surface" style={{ padding: 18 }}>
+      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Projets</div>
+      <div className="muted" style={{ fontSize: 11.5, marginBottom: 12 }}>
+        Un projet regroupe les compagnies qui partagent un même budget (Google Sheet ou Excel).
+        Toutes les compagnies d'un projet voient le même budget — switcher entre elles ne
+        recharge pas. La source du budget se configure depuis l'écran « Connecter Google Sheets »
+        de n'importe quelle compagnie du projet.
+      </div>
+
+      {projects.map((p) => {
+        const linked = companies.filter((c) => c.projectId === p.id);
+        return (
+          <div
+            key={p.id}
+            style={{
+              padding: 12,
+              border: '1px solid var(--line)',
+              borderRadius: 8,
+              marginBottom: 10,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <input
+                className="input"
+                defaultValue={p.name}
+                onBlur={(e) => {
+                  if (e.target.value.trim() && e.target.value !== p.name) {
+                    void rename(p.id, e.target.value);
+                  }
+                }}
+                style={{ flex: 1, fontWeight: 600 }}
+              />
+              <span className="muted" style={{ fontSize: 11 }}>
+                {p.budgetSource === 'gsheets' && p.gsheetsWorkbookName
+                  ? `Sheets : ${p.gsheetsWorkbookName}`
+                  : p.budgetSource === 'excel' && p.excelPath
+                    ? `Excel : …${p.excelPath.slice(-32)}`
+                    : 'Aucune source configurée'}
+              </span>
+              <button
+                className="btn btn-sm btn-danger"
+                onClick={() => void remove(p.id)}
+                disabled={linked.length > 0}
+                title={
+                  linked.length > 0
+                    ? `Migre les ${linked.length} compagnie(s) vers un autre projet d'abord.`
+                    : 'Supprimer ce projet'
+                }
+              >
+                Supprimer
+              </button>
+            </div>
+            {linked.length > 0 && (
+              <div
+                className="muted"
+                style={{ fontSize: 11.5, marginTop: 8, marginLeft: 2 }}
+              >
+                {linked.length} compagnie(s) :{' '}
+                {linked.map((c) => c.label).join(', ')}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Reassign UI — show each company with a project picker so the
+          user can move them between projects without leaving Settings. */}
+      {projects.length > 1 && (
+        <div
+          style={{
+            marginTop: 16,
+            paddingTop: 12,
+            borderTop: '1px solid var(--line)',
+          }}
+        >
+          <div className="muted" style={{ fontSize: 11.5, marginBottom: 8, fontWeight: 500 }}>
+            Réaffecter une compagnie :
+          </div>
+          {companies.map((c) => (
+            <div
+              key={c.key}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                marginBottom: 6,
+                fontSize: 12,
+              }}
+            >
+              <span style={{ flex: 1 }}>{c.label}</span>
+              <select
+                className="input"
+                value={c.projectId ?? ''}
+                onChange={(e) => void setProject(c.key, e.target.value)}
+                style={{ width: 220 }}
+              >
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div
+        style={{
+          display: 'flex',
+          gap: 8,
+          marginTop: 16,
+          paddingTop: 12,
+          borderTop: '1px solid var(--line)',
+        }}
+      >
+        <input
+          className="input"
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder="Nom du nouveau projet (ex. 1310 Charlevoix)"
+          style={{ flex: 1 }}
+        />
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={() => void create()}
+          disabled={!newName.trim()}
+        >
+          <Icon name="plus" size={11} /> Créer un projet
+        </button>
+      </div>
+
+      {error && (
+        <div style={{ marginTop: 10, color: 'var(--err)', fontSize: 11.5 }}>
+          {error}
+        </div>
+      )}
     </div>
   );
 }
