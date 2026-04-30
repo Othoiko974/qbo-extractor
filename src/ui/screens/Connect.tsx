@@ -281,7 +281,23 @@ export function Connect() {
   const addCompany = async () => {
     if (!label || !initials) return;
     setStatus('waiting');
-    const res = (await window.qboApi.addCompany({ label, initials: initials.toUpperCase().slice(0, 3), color })) as {
+    // If the user came in via "Ajouter une compagnie au projet" from
+    // Settings, the project id is stashed in sessionStorage so the new
+    // company lands in the right project instead of the default first one.
+    let pendingProjectId: string | null = null;
+    try {
+      pendingProjectId = sessionStorage.getItem('pending_project_id');
+      sessionStorage.removeItem('pending_project_id');
+    } catch {
+      /* sessionStorage unavailable — ignore */
+    }
+    const payload: Record<string, unknown> = {
+      label,
+      initials: initials.toUpperCase().slice(0, 3),
+      color,
+    };
+    if (pendingProjectId) payload.project_id = pendingProjectId;
+    const res = (await window.qboApi.addCompany(payload)) as {
       ok: boolean;
       company?: { key: string };
       error?: string;
