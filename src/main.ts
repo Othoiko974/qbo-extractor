@@ -92,7 +92,15 @@ app.on('ready', () => {
   protocol.handle('qbo-file', async (request) => {
     try {
       const u = new URL(request.url);
-      const filePath = decodeURIComponent(u.pathname);
+      let filePath = decodeURIComponent(u.pathname);
+      // Win32: pathname round-trips as "/C:/Users/Owen/x.pdf". Node's fs
+      // accepts forward-slash paths but the leading slash before the
+      // drive letter is interpreted as a UNC share root and breaks
+      // existsSync. Strip it on win32 only — macOS / linux paths
+      // genuinely start with "/".
+      if (process.platform === 'win32' && /^\/[A-Za-z]:[\\/]/.test(filePath)) {
+        filePath = filePath.slice(1);
+      }
       if (!fs.existsSync(filePath)) {
         return new Response('Not found', { status: 404 });
       }

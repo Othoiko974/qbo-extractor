@@ -4,17 +4,7 @@ import { Icon, fmtCurrency } from '../Icon';
 import type { RunRowCandidate, SisterCandidate } from '../../types/domain';
 import { t, useLang } from '../../i18n';
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
-import { qboTxnUrl } from '../../shared/qbo-url';
-
-// Convert an absolute filesystem path into the qbo-file:// URL the
-// renderer can load via <iframe>/<img>. Mirrors the helper in Preview.tsx.
-function toLocalFileUrl(absPath: string): string {
-  const encoded = absPath
-    .split('/')
-    .map((seg) => encodeURIComponent(seg))
-    .join('/');
-  return `qbo-file://local${encoded}`;
-}
+import { qboTxnUrl, toLocalFileUrl } from '../../shared/qbo-url';
 
 // Resolver screen — image 2 of the design handoff. Shown when the user
 // clicks "Choisir" on an ambiguous row in the Review screen. The candidates

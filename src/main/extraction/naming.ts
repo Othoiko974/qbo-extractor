@@ -11,9 +11,19 @@ export type NamingVars = {
 };
 
 const UNSAFE = /[\\/:*?"<>|\n\r\t]/g;
+// Win32 silently strips trailing dots / spaces from path components, which
+// breaks the rest of the pipeline: mkdir succeeds with "Altitude 233 Inc"
+// but path.join("Altitude 233 Inc.", "file.pdf") later targets a folder
+// that doesn't exist. Strip them up front so what we ask for == what
+// actually lands on disk on every platform.
+const TRAILING_DOTS_OR_SPACES = /[. ]+$/;
 
 function sanitize(s: string): string {
-  return s.replace(UNSAFE, '_').replace(/\s+/g, ' ').trim();
+  return s
+    .replace(UNSAFE, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(TRAILING_DOTS_OR_SPACES, '');
 }
 
 function fmtAmount(n: number): string {

@@ -3,6 +3,7 @@ import { useStore } from '../../store/store';
 import { Icon } from '../Icon';
 import { t, useLang } from '../../i18n';
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
+import { toLocalFileUrl as toQboUrl } from '../../shared/qbo-url';
 
 type ExtractedFile = {
   name: string;
@@ -23,17 +24,6 @@ function isPdf(name: string): boolean {
 }
 function isImage(name: string): boolean {
   return /\.(jpe?g|png|heic|tiff?|gif|webp)$/i.test(name);
-}
-
-// Convert an absolute path to a qbo-file:// URL the sandboxed renderer can
-// load via <iframe>/<img>. The pathname keeps a leading "/" so absolute
-// macOS paths round-trip cleanly.
-function toQboUrl(absPath: string): string {
-  const encoded = absPath
-    .split('/')
-    .map((seg) => encodeURIComponent(seg))
-    .join('/');
-  return `qbo-file://local${encoded}`;
 }
 
 export function Preview() {

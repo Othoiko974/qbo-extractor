@@ -1,3 +1,19 @@
+// Convert an absolute filesystem path into the qbo-file:// URL the
+// renderer can load via <iframe>/<img>. Cross-platform:
+//   macOS: /Users/owen/x.pdf       → qbo-file://local/Users/owen/x.pdf
+//   Win:   C:\Users\Owen\x.pdf     → qbo-file://local/C:/Users/Owen/x.pdf
+// The main-process protocol handler strips the leading slash before
+// the drive letter on win32 so Node's fs accepts it.
+export function toLocalFileUrl(absPath: string): string {
+  const normalized = absPath.replace(/\\/g, '/');
+  const withLead = normalized.startsWith('/') ? normalized : '/' + normalized;
+  const encoded = withLead
+    .split('/')
+    .map((seg) => encodeURIComponent(seg))
+    .join('/');
+  return `qbo-file://local${encoded}`;
+}
+
 // Build a deep-link to a QBO transaction. QBO's web app routes per type:
 //   - Bill        → /app/bill?txnId=…
 //   - Invoice     → /app/invoice?txnId=…   (sales / re-billing imputation)
