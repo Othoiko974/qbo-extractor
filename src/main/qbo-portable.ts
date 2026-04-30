@@ -22,13 +22,23 @@ const SALT_LEN = 16;
 const IV_LEN = 12;
 
 export type PortableConnection = {
-  v: 1;
+  v: 1 | 2;
   meta: {
     companyKey: string;
     companyLabel: string;
     realmId: string;
     env: 'sandbox' | 'production';
     exportedAt: string;
+  };
+  // v2+ : pre-fills the imported company so the user doesn't have to
+  // re-pick a workbook / re-set entity aliases after importing the
+  // QBO connection. Only fields that round-trip safely across users
+  // ship — local Excel paths and per-user Google account email don't.
+  budget?: {
+    source: 'gsheets' | 'excel' | null;
+    gsheetsWorkbookId?: string;
+    gsheetsWorkbookName?: string;
+    entityAliases?: string[];
   };
   cipher: {
     alg: 'aes-256-gcm';
@@ -72,8 +82,28 @@ export async function exportQboConnection(
   ]);
   const authTag = cipher.getAuthTag();
 
+  // Capture the budget config the admin already set up. excel_path is
+  // local to the admin's machine so it's deliberately excluded — the
+  // Google-Sheets workbook ID is universal. gsheets_account_email also
+  // belongs to the admin's session and shouldn't pre-populate the
+  // employee's Settings.
+  let entityAliases: string[] = [];
+  try {
+    entityAliases = JSON.parse(company.entity_aliases) as string[];
+  } catch {
+    /* fall back to empty */
+  }
+  const budgetSnapshot: PortableConnection['budget'] = {
+    source: company.budget_source,
+    ...(company.gsheets_workbook_id && { gsheetsWorkbookId: company.gsheets_workbook_id }),
+    ...(company.gsheets_workbook_name && {
+      gsheetsWorkbookName: company.gsheets_workbook_name,
+    }),
+    ...(entityAliases.length > 0 && { entityAliases }),
+  };
+
   const blob: PortableConnection = {
-    v: 1,
+    v: 2,
     meta: {
       companyKey: company.key,
       companyLabel: company.label,
@@ -81,6 +111,7 @@ export async function exportQboConnection(
       env: company.qbo_env,
       exportedAt: new Date().toISOString(),
     },
+    budget: budgetSnapshot,
     cipher: {
       alg: 'aes-256-gcm',
       kdf: 'pbkdf2-sha256',
@@ -113,10 +144,10 @@ export async function importQboConnection(
   } catch {
     return { ok: false, error: 'Fichier invalide (JSON malformé).' };
   }
-  if (blob.v !== 1) {
+  if (blob.v !== 1 && blob.v !== 2) {
     return {
       ok: false,
-      error: `Version de fichier non supportée (v${blob.v}, attendu v1).`,
+      error: `Version de fichier non supportée (v${blob.v}, attendu v1 ou v2).`,
     };
   }
   if (
@@ -165,12 +196,34 @@ export async function importQboConnection(
 
   // Realm + env come from the export meta — the source company's QBO
   // realm is shared with the importer (same Intuit company, different
-  // OAuth user session).
-  Companies.update(companyKey, {
+  // OAuth user session). v2 also pre-fills the budget config the admin
+  // set up so the employee doesn't get the "configure budget source"
+  // prompt the first time they switch to this company in the sidebar.
+  const update: Parameters<typeof Companies.update>[1] = {
     qbo_realm_id: blob.meta.realmId,
     qbo_env: blob.meta.env,
     qbo_connected: 1,
-  });
+  };
+  if (blob.v === 2 && blob.budget) {
+    if (blob.budget.source !== undefined) update.budget_source = blob.budget.source;
+    if (blob.budget.gsheetsWorkbookId !== undefined) {
+      update.gsheets_workbook_id = blob.budget.gsheetsWorkbookId;
+    }
+    if (blob.budget.gsheetsWorkbookName !== undefined) {
+      update.gsheets_workbook_name = blob.budget.gsheetsWorkbookName;
+    }
+  }
+  Companies.update(companyKey, update);
+
+  // Entity aliases live in their own table — apply only when the
+  // bundle carried them and the importer hasn't already customized.
+  if (
+    blob.v === 2 &&
+    blob.budget?.entityAliases &&
+    blob.budget.entityAliases.length > 0
+  ) {
+    Companies.setEntityAliases(companyKey, blob.budget.entityAliases);
+  }
 
   await Secrets.setQbo(companyKey, {
     access_token: tokens.access_token,
@@ -191,7 +244,7 @@ export function peekPortableMeta(
 ): PortableConnection['meta'] | null {
   try {
     const blob = JSON.parse(fileContent) as PortableConnection;
-    if (blob.v !== 1 || !blob.meta) return null;
+    if ((blob.v !== 1 && blob.v !== 2) || !blob.meta) return null;
     return blob.meta;
   } catch {
     return null;
