@@ -2,7 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { app, type WebContents } from 'electron';
 import type { BudgetRow, ExtractionStatus } from '../../types/domain';
-import { QboClient, type QboBill } from '../qbo/client';
+import { type QboBill } from '../qbo/client';
+import { createQboClient, type QboLike } from '../qbo/factory';
+import { isProxyMode, getProxyConfig } from '../qbo/proxy-client';
 import { Companies, Runs, RunRows, RunRowCandidates, Settings, type RunRow, type RunRowRow } from '../db/repo';
 import { Secrets } from '../secrets';
 import { applyTemplate, applyFolderTemplate, extensionFromContentType } from './naming';
@@ -78,8 +80,13 @@ export class ExtractionEngine {
     const company = Companies.get(companyKey);
     if (!company) return { error: 'Entreprise introuvable.' };
     if (!company.qbo_realm_id) return { error: 'QuickBooks non connecté pour cette entreprise.' };
-    const token = await Secrets.getQbo(companyKey);
-    if (!token) return { error: 'Token QBO manquant — reconnecter QuickBooks.' };
+    if (isProxyMode()) {
+      const cfg = await getProxyConfig(companyKey);
+      if (!cfg) return { error: 'Mode proxy actif mais API key absente pour cette compagnie — configure-la dans Connect.' };
+    } else {
+      const token = await Secrets.getQbo(companyKey);
+      if (!token) return { error: 'Token QBO manquant — reconnecter QuickBooks.' };
+    }
 
     log.info('extraction', 'start', {
       companyKey,
@@ -128,7 +135,7 @@ export class ExtractionEngine {
       done: 0,
     };
 
-    const client = new QboClient(companyKey, company.qbo_realm_id, company.qbo_env);
+    const client = createQboClient(companyKey, company.qbo_realm_id, company.qbo_env);
 
     // Fire and forget; progress streams via IPC.
     this.runLoop(run, rows, persisted, client, companyFolder, template, folderTemplate).catch((err) => {
@@ -152,7 +159,7 @@ export class ExtractionEngine {
     run: RunRow,
     rows: BudgetRow[],
     persisted: RunRowRow[],
-    client: QboClient,
+    client: QboLike,
     companyFolder: string,
     template: string,
     folderTemplate: string,
@@ -235,7 +242,7 @@ export class ExtractionEngine {
 
   private async processRow(
     row: BudgetRow,
-    client: QboClient,
+    client: QboLike,
     companyFolder: string,
     template: string,
     folderTemplate: string,
@@ -431,7 +438,7 @@ export class ExtractionEngine {
   // Used by the run-loop for unambiguous matches AND by the AmbiguousResolver
   // when the user manually picks a candidate.
   async downloadAndSave(
-    client: QboClient,
+    client: QboLike,
     txn: QboBill,
     row: BudgetRow,
     companyFolder: string,
@@ -547,8 +554,13 @@ export class ExtractionEngine {
     if (!fetchCompany || !fetchCompany.qbo_realm_id) {
       return { ok: false, error: 'Entreprise source / connexion QBO indisponible.' };
     }
-    const token = await Secrets.getQbo(fetchCompany.key);
-    if (!token) return { ok: false, error: 'Token QBO manquant pour la compagnie source.' };
+    if (isProxyMode()) {
+      const cfg = await getProxyConfig(fetchCompany.key);
+      if (!cfg) return { ok: false, error: 'Mode proxy actif mais API key absente pour la compagnie source.' };
+    } else {
+      const token = await Secrets.getQbo(fetchCompany.key);
+      if (!token) return { ok: false, error: 'Token QBO manquant pour la compagnie source.' };
+    }
 
     const baseFolder = Settings.get('base_folder') ?? path.join(app.getPath('documents'), 'QBO Extracts');
     const template = Settings.get('naming_template') ?? 'Depense_{num}_{fournisseur}_{date}_{montant}';
@@ -556,7 +568,7 @@ export class ExtractionEngine {
     const companyFolder = run.folder ?? path.join(baseFolder, sanitizeFolder(runCompany.label));
     fs.mkdirSync(companyFolder, { recursive: true });
 
-    const client = new QboClient(fetchCompany.key, fetchCompany.qbo_realm_id, fetchCompany.qbo_env);
+    const client = createQboClient(fetchCompany.key, fetchCompany.qbo_realm_id, fetchCompany.qbo_env);
     const txn: QboBill = {
       Id: params.txnId,
       _type: params.txnType,
@@ -680,7 +692,14 @@ function extKind(fileName: string | undefined, contentType: string | undefined):
 }
 
 function sanitizeFolder(s: string): string {
-  return s.replace(/[\\/:*?"<>|\n\r\t]/g, '_').replace(/\s+/g, ' ').trim();
+  // Trailing dot/space is silently dropped by win32 — strip it ourselves
+  // so a label like "Altitude 233 Inc." doesn't desync the mkdir target
+  // ("Altitude 233 Inc") from later path.join lookups (still with the dot).
+  return s
+    .replace(/[\\/:*?"<>|\n\r\t]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/, '');
 }
 
 // Build the list of invoice-number candidates to query QBO with. The primary is

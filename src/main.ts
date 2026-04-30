@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import started from 'electron-squirrel-startup';
 import { registerIpcHandlers } from './main/ipc';
 import { registerCustomScheme, handleDeepLink } from './main/oauth-qbo';
+import { handlePairDeepLink } from './main/qbo/proxy-pair';
 
 // Custom scheme to expose extracted files to the sandboxed renderer for
 // inline preview (PDF iframe, <img> for images). file:// URLs are blocked
@@ -28,9 +29,18 @@ if (!gotLock) {
   app.quit();
 }
 
+function dispatchDeepLink(url: string): void {
+  if (url.startsWith('qboextractor://pair')) {
+    void handlePairDeepLink(url, mainWindow);
+    return;
+  }
+  // OAuth callback (legacy local-mode flow) and any other qboextractor://*.
+  handleDeepLink(url, mainWindow);
+}
+
 app.on('second-instance', (_event, argv) => {
   const deepLink = argv.find((a) => a.startsWith('qboextractor://'));
-  if (deepLink) handleDeepLink(deepLink, mainWindow);
+  if (deepLink) dispatchDeepLink(deepLink);
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
@@ -39,7 +49,7 @@ app.on('second-instance', (_event, argv) => {
 
 app.on('open-url', (event, url) => {
   event.preventDefault();
-  handleDeepLink(url, mainWindow);
+  dispatchDeepLink(url);
 });
 
 const createWindow = () => {

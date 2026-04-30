@@ -126,6 +126,15 @@ export function Connect() {
   const [credsStatus, setCredsStatus] = useState<'idle' | 'waiting' | 'ok' | 'error'>('idle');
   const [credsError, setCredsError] = useState<string | null>(null);
 
+  // Server proxy: Vercel-hosted endpoint that holds the QBO token centrally.
+  const [proxyEnabled, setProxyEnabled] = useState(false);
+  const [proxyUrl, setProxyUrl] = useState('');
+  const [proxyHasKey, setProxyHasKey] = useState(false);
+  const [proxyKeyPreview, setProxyKeyPreview] = useState<string | null>(null);
+  const [proxyKeyInput, setProxyKeyInput] = useState('');
+  const [proxyStatus, setProxyStatus] = useState<'idle' | 'waiting' | 'ok' | 'error'>('idle');
+  const [proxyMsg, setProxyMsg] = useState<string | null>(null);
+
   // Edit form (for the currently-active company).
   const [editLabel, setEditLabel] = useState('');
   const [editInitials, setEditInitials] = useState('');
@@ -143,6 +152,110 @@ export function Connect() {
       setCredsPreview(res.clientIdPreview);
     })();
   }, []);
+
+  useEffect(() => {
+    if (!company) return;
+    (async () => {
+      const cfg = (await window.qboApi.qboProxyGetConfig(company.key)) as {
+        enabled: boolean;
+        url: string;
+        hasApiKey: boolean;
+        apiKeyPreview: string | null;
+      };
+      setProxyEnabled(cfg.enabled);
+      setProxyUrl(cfg.url || 'https://qbo-extractor-oauth.vercel.app');
+      setProxyHasKey(cfg.hasApiKey);
+      setProxyKeyPreview(cfg.apiKeyPreview);
+      setProxyKeyInput('');
+      setProxyStatus('idle');
+      setProxyMsg(null);
+    })();
+  }, [company?.key]);
+
+  const saveProxyConfig = async () => {
+    if (!company) return;
+    setProxyStatus('waiting');
+    setProxyMsg(null);
+    const res = (await window.qboApi.qboProxySetConfig({
+      companyKey: company.key,
+      enabled: proxyEnabled,
+      url: proxyUrl.trim(),
+      apiKey: proxyKeyInput.trim() || undefined,
+    })) as { ok: boolean; error?: string };
+    if (!res.ok) {
+      setProxyStatus('error');
+      setProxyMsg(res.error ?? 'Échec de la sauvegarde.');
+      return;
+    }
+    setProxyKeyInput('');
+    const cfg = (await window.qboApi.qboProxyGetConfig(company.key)) as {
+      enabled: boolean;
+      url: string;
+      hasApiKey: boolean;
+      apiKeyPreview: string | null;
+    };
+    setProxyHasKey(cfg.hasApiKey);
+    setProxyKeyPreview(cfg.apiKeyPreview);
+    setProxyStatus('ok');
+    setProxyMsg('Enregistré.');
+  };
+
+  const testProxy = async () => {
+    if (!company) return;
+    setProxyStatus('waiting');
+    setProxyMsg(null);
+    const res = (await window.qboApi.qboProxyTest(company.key)) as
+      | { ok: true; connected: boolean; realm_id?: string; refresh_expires_in_days?: number }
+      | { ok: false; error: string };
+    if (!res.ok) {
+      setProxyStatus('error');
+      setProxyMsg(res.error);
+      return;
+    }
+    if (!res.connected) {
+      setProxyStatus('error');
+      setProxyMsg('Proxy joignable mais aucun realm connecté côté serveur.');
+      return;
+    }
+    setProxyStatus('ok');
+    setProxyMsg(
+      `Connecté — realm ${res.realm_id}, refresh expire dans ${res.refresh_expires_in_days} j.`,
+    );
+  };
+
+  const clearProxyKey = async () => {
+    if (!company) return;
+    await window.qboApi.qboProxyClearKey(company.key);
+    setProxyHasKey(false);
+    setProxyKeyPreview(null);
+    setProxyMsg('API key supprimée.');
+    setProxyStatus('ok');
+  };
+
+  const pairProxy = async () => {
+    if (!company) return;
+    setProxyStatus('waiting');
+    setProxyMsg('Navigateur ouvert — colle ton code de pairing puis confirme.');
+    const res = (await window.qboApi.qboProxyPair(company.key)) as
+      | { ok: true; realmId: string; label: string }
+      | { ok: false; error: string };
+    if (!res.ok) {
+      setProxyStatus('error');
+      setProxyMsg(res.error);
+      return;
+    }
+    const cfg = (await window.qboApi.qboProxyGetConfig(company.key)) as {
+      enabled: boolean;
+      url: string;
+      hasApiKey: boolean;
+      apiKeyPreview: string | null;
+    };
+    setProxyEnabled(cfg.enabled);
+    setProxyHasKey(cfg.hasApiKey);
+    setProxyKeyPreview(cfg.apiKeyPreview);
+    setProxyStatus('ok');
+    setProxyMsg(`Pairé avec ${res.label} (realm ${res.realmId}).`);
+  };
 
   useEffect(() => {
     if (company) {
@@ -530,6 +643,116 @@ export function Connect() {
             )}
             {credsStatus === 'error' && credsError && (
               <div style={{ marginTop: 8, color: 'var(--err)', fontSize: 12 }}>{credsError}</div>
+            )}
+          </div>
+        )}
+
+        {mode === 'connect' && (
+          <div className="card-surface" style={{ padding: 20, marginBottom: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>
+              QBO Server Proxy (centralisé)
+            </div>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+              Quand activé, l'app n'OAuth pas Intuit : elle parle au proxy Vercel qui détient le
+              token. Permet aux Standard Users d'utiliser QBO sans passer par un admin Intuit.
+              L'admin connecte une fois sur <code>/admin</code> du proxy.
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={proxyEnabled}
+                  onChange={(e) => setProxyEnabled(e.target.checked)}
+                />
+                <span style={{ fontSize: 13 }}>Activer le mode proxy</span>
+              </label>
+            </div>
+            <Field label="URL du proxy">
+              <input
+                className="input"
+                value={proxyUrl}
+                onChange={(e) => setProxyUrl(e.target.value)}
+                placeholder="https://qbo-extractor-oauth.vercel.app"
+                spellCheck={false}
+              />
+            </Field>
+            {proxyHasKey && (
+              <div
+                style={{
+                  padding: 10,
+                  background: '#eef5ec',
+                  border: '1px solid #cbdcc4',
+                  borderRadius: 6,
+                  fontSize: 12,
+                  marginBottom: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+              >
+                <span style={{ color: 'var(--ok)' }}>✓</span>
+                API key configurée — <code>{proxyKeyPreview}</code>
+                <div style={{ flex: 1 }} />
+                <button className="btn btn-sm btn-ghost" onClick={clearProxyKey}>
+                  Supprimer
+                </button>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+              <button
+                className="btn btn-primary"
+                onClick={pairProxy}
+                disabled={!proxyEnabled || proxyStatus === 'waiting'}
+              >
+                {proxyHasKey ? 'Re-pair via le navigateur' : 'Pair via le navigateur'}
+              </button>
+              <button
+                className="btn btn-ghost"
+                onClick={testProxy}
+                disabled={!proxyEnabled || !proxyHasKey || proxyStatus === 'waiting'}
+              >
+                Tester la connexion
+              </button>
+              <button
+                className="btn btn-ghost"
+                onClick={saveProxyConfig}
+                disabled={proxyStatus === 'waiting'}
+                title="Sauvegarde l'URL et le toggle (sans toucher à l'API key)."
+              >
+                Enregistrer URL/toggle
+              </button>
+            </div>
+            <details style={{ fontSize: 12 }}>
+              <summary className="muted" style={{ cursor: 'pointer' }}>Coller une API key manuellement (avancé)</summary>
+              <Field label="API key (qek_…)">
+                <input
+                  className="input"
+                  type="password"
+                  value={proxyKeyInput}
+                  onChange={(e) => setProxyKeyInput(e.target.value)}
+                  placeholder="qek_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </Field>
+              <button
+                className="btn btn-ghost"
+                onClick={saveProxyConfig}
+                disabled={!proxyKeyInput.trim() || proxyStatus === 'waiting'}
+              >
+                Enregistrer cette key
+              </button>
+            </details>
+            {proxyMsg && (
+              <div
+                style={{
+                  marginTop: 8,
+                  fontSize: 12,
+                  color: proxyStatus === 'error' ? 'var(--err)' : 'var(--ok)',
+                }}
+              >
+                {proxyMsg}
+              </div>
             )}
           </div>
         )}

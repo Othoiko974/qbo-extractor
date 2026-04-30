@@ -43,6 +43,7 @@ import { ExtractionEngine } from './extraction/engine';
 import { onQboRequest } from './qbo/client';
 import { createQboClient } from './qbo/factory';
 import { isProxyMode, pingProxyHealth } from './qbo/proxy-client';
+import { startPairing } from './qbo/proxy-pair';
 import {
   exportQboConnection,
   importQboConnection,
@@ -120,7 +121,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     }
     let tokenExpiresInSec: number | undefined;
     if (isProxyMode()) {
-      const health = await pingProxyHealth();
+      const health = await pingProxyHealth(companyKey);
       if (!health.ok) return { ok: false, error: health.error };
       if (!health.connected) return { ok: false, error: 'Proxy joignable mais aucun realm connecté.' };
       // refresh_expires_in_days → seconds for backward-compat with the UI.
@@ -168,8 +169,8 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     return { ok: true };
   });
 
-  ipcMain.handle('qbo:proxy:getConfig', async () => {
-    const apiKey = await Secrets.getQboProxyApiKey();
+  ipcMain.handle('qbo:proxy:getConfig', async (_evt, companyKey: string) => {
+    const apiKey = companyKey ? await Secrets.getQboProxyApiKey(companyKey) : null;
     return {
       enabled: isProxyMode(),
       url: Settings.get('qbo_proxy_url') ?? '',
@@ -180,12 +181,19 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
 
   ipcMain.handle(
     'qbo:proxy:setConfig',
-    async (_evt, config: { enabled: boolean; url: string; apiKey?: string }) => {
+    async (
+      _evt,
+      config: { companyKey: string; enabled: boolean; url: string; apiKey?: string },
+    ) => {
       try {
         Settings.set('qbo_proxy_enabled', config.enabled ? '1' : '0');
         Settings.set('qbo_proxy_url', (config.url ?? '').trim());
-        if (typeof config.apiKey === 'string' && config.apiKey.trim().length > 0) {
-          await Secrets.setQboProxyApiKey(config.apiKey.trim());
+        if (
+          config.companyKey &&
+          typeof config.apiKey === 'string' &&
+          config.apiKey.trim().length > 0
+        ) {
+          await Secrets.setQboProxyApiKey(config.companyKey, config.apiKey.trim());
         }
         return { ok: true };
       } catch (err) {
@@ -194,13 +202,23 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     },
   );
 
-  ipcMain.handle('qbo:proxy:clearKey', async () => {
-    await Secrets.deleteQboProxyApiKey();
+  ipcMain.handle('qbo:proxy:clearKey', async (_evt, companyKey: string) => {
+    if (companyKey) await Secrets.deleteQboProxyApiKey(companyKey);
     return { ok: true };
   });
 
-  ipcMain.handle('qbo:proxy:test', async () => {
-    return pingProxyHealth();
+  ipcMain.handle('qbo:proxy:test', async (_evt, companyKey: string) => {
+    return pingProxyHealth(companyKey);
+  });
+
+  ipcMain.handle('qbo:proxy:pair', async (_evt, companyKey: string) => {
+    if (!companyKey) return { ok: false, error: 'companyKey requis.' };
+    try {
+      const r = await startPairing(companyKey);
+      return { ok: true, realmId: r.realmId, label: r.label };
+    } catch (err) {
+      return { ok: false, error: errMsg(err) };
+    }
   });
 
   ipcMain.handle('qbo:pickTokenFile', async () => {

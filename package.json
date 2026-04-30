@@ -6,13 +6,13 @@
   "main": ".vite/build/main.js",
   "private": true,
   "scripts": {
-    "start": "electron-forge start",
+    "start": "node scripts/patch-dev-electron.mjs && electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx .",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
-    "postinstall": "electron-rebuild -f -w better-sqlite3 || true"
+    "postinstall": "electron-rebuild -f -w better-sqlite3 || true; node scripts/patch-dev-electron.mjs || true"
   },
   "keywords": [],
   "author": "Altitude 233 Inc.",

@@ -34,12 +34,19 @@ const api = {
     ipcRenderer.invoke('qbo:setAppCreds', clientId, clientSecret),
   qboDeleteAppCreds: () => ipcRenderer.invoke('qbo:deleteAppCreds'),
 
-  // QBO Server Proxy (centralized token mode)
-  qboProxyGetConfig: () => ipcRenderer.invoke('qbo:proxy:getConfig'),
-  qboProxySetConfig: (config: { enabled: boolean; url: string; apiKey?: string }) =>
-    ipcRenderer.invoke('qbo:proxy:setConfig', config),
-  qboProxyClearKey: () => ipcRenderer.invoke('qbo:proxy:clearKey'),
-  qboProxyTest: () => ipcRenderer.invoke('qbo:proxy:test'),
+  // QBO Server Proxy (centralized token mode) — keys are per-company.
+  qboProxyGetConfig: (companyKey: string) =>
+    ipcRenderer.invoke('qbo:proxy:getConfig', companyKey),
+  qboProxySetConfig: (config: {
+    companyKey: string;
+    enabled: boolean;
+    url: string;
+    apiKey?: string;
+  }) => ipcRenderer.invoke('qbo:proxy:setConfig', config),
+  qboProxyClearKey: (companyKey: string) =>
+    ipcRenderer.invoke('qbo:proxy:clearKey', companyKey),
+  qboProxyTest: (companyKey: string) => ipcRenderer.invoke('qbo:proxy:test', companyKey),
+  qboProxyPair: (companyKey: string) => ipcRenderer.invoke('qbo:proxy:pair', companyKey),
 
   // Google OAuth + Sheets
   googleConnect: (companyKey: string) => ipcRenderer.invoke('google:connect', companyKey),

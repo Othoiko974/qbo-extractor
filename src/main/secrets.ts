@@ -123,6 +123,16 @@ export const Secrets = {
     deleteValue('qbo:appCreds');
   },
 
+  async getQboProxyApiKey(companyKey: string): Promise<string | null> {
+    return getValue(`qbo:proxyApiKey:${companyKey}`);
+  },
+  async setQboProxyApiKey(companyKey: string, key: string): Promise<void> {
+    setValue(`qbo:proxyApiKey:${companyKey}`, key);
+  },
+  async deleteQboProxyApiKey(companyKey: string): Promise<void> {
+    deleteValue(`qbo:proxyApiKey:${companyKey}`);
+  },
+
   async getGoogle(companyKey: string): Promise<GoogleToken | null> {
     const raw = getValue(`google:${companyKey}`);
     return raw ? (JSON.parse(raw) as GoogleToken) : null;
