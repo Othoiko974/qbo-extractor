@@ -3,7 +3,11 @@ import { useStore } from '../../store/store';
 import { Icon, fmtCurrency } from '../Icon';
 import type { BudgetRow } from '../../types/domain';
 import { t, useLang } from '../../i18n';
-import { rowBelongsToActiveCompany, rowDestinationLabel } from '../../shared/entity';
+import {
+  rowBelongsToActiveCompany,
+  rowBelongsToActiveCompte,
+  rowDestinationLabel,
+} from '../../shared/entity';
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
 import { Tooltip } from '../Tooltip';
 
@@ -18,6 +22,8 @@ export function Dashboard() {
     companies,
     projects,
     activeCompanyKey,
+    activeView,
+    activeComptePid,
     lastSync,
     loading,
     error,
@@ -37,6 +43,19 @@ export function Dashboard() {
   const [launchOffscreen, setLaunchOffscreen] = useState(false);
 
   const company = companies.find((c) => c.key === activeCompanyKey);
+  const isCompteView = activeView === 'compte';
+  // Active project resolved from view mode — Compte view binds directly
+  // to a project, normal view inherits via the active company.
+  const activeProject = projects.find(
+    (p) => p.id === (isCompteView ? activeComptePid : company?.projectId ?? null),
+  );
+  // Companies in the same project — used by Compte filter to detect
+  // "no real company claims this row". We accept orphan companies (no
+  // project) only when no project is anchored at all.
+  const projectCompanies = useMemo(
+    () => (activeProject ? companies.filter((c) => c.projectId === activeProject.id) : companies),
+    [companies, activeProject],
+  );
 
   const sheets = useMemo(() => {
     const seen = new Set<string>();
@@ -56,31 +75,33 @@ export function Dashboard() {
     return budget.filter((r) => r.sheet === sheet);
   }, [budget, sheet]);
 
-  // Booking-entity scoping: a row belongs to the active company's QBO if
-  // either (a) its Fournisseur cell directly matches active's aliases, or
-  // (b) it doesn't match any *other connected* sister — the
-  // refacturation rule. Hydro / SATCOM / unconnected sisters like VSL
-  // therefore stay visible with their original entity name in the chip
-  // rather than being hidden as "hors entreprise".
-  const entityFiltered = useMemo(() => {
-    if (!company) return sheetFiltered;
-    if (entityScope === 'all') return sheetFiltered;
-    return sheetFiltered.filter((r) =>
-      rowBelongsToActiveCompany(r.bookingEntity, company, companies),
-    );
-  }, [sheetFiltered, entityScope, company, companies]);
+  // Booking-entity scoping: differs by view mode.
+  //   - Company view: "mine" = direct match on active company's aliases
+  //     (fallback rows now belong to the project's Compte, not to the
+  //     active sister).
+  //   - Compte view: "mine" = the row's bookingEntity matches no real
+  //     company in the project — i.e. exactly the rows whose chip says
+  //     "Compte [project]".
+  // The "all" toggle still shows everything so the user can audit the
+  // full project budget regardless of which entry in the sidebar is
+  // selected.
+  const rowIsMine = (bookingEntity: string | null | undefined): boolean => {
+    if (isCompteView) return rowBelongsToActiveCompte(bookingEntity, projectCompanies);
+    if (!company) return true;
+    return rowBelongsToActiveCompany(bookingEntity, company);
+  };
 
-  // Foreign-entity KPI — counts rows that legitimately live in a connected
-  // sister's QBO (those would fail extraction from this realm). Rows
-  // belonging to the active company by fallback aren't foreign.
+  const entityFiltered = useMemo(() => {
+    if (entityScope === 'all') return sheetFiltered;
+    return sheetFiltered.filter((r) => rowIsMine(r.bookingEntity));
+  }, [sheetFiltered, entityScope, isCompteView, company, projectCompanies]);
+
+  // "Hors entreprise" KPI — counts rows that don't belong to the
+  // current view. Used to surface a tooltip / nudge toward the "all"
+  // scope when the filter is hiding non-trivial volume.
   const foreignCount = useMemo(() => {
-    if (!company) return 0;
-    return sheetFiltered.reduce(
-      (n, r) =>
-        rowBelongsToActiveCompany(r.bookingEntity, company, companies) ? n : n + 1,
-      0,
-    );
-  }, [sheetFiltered, company, companies]);
+    return sheetFiltered.reduce((n, r) => (rowIsMine(r.bookingEntity) ? n : n + 1), 0);
+  }, [sheetFiltered, isCompteView, company, projectCompanies]);
 
   const visible = useMemo(() => {
     if (filter === 'missing') return entityFiltered.filter((r) => !r.hasAttachment);
@@ -167,6 +188,14 @@ export function Dashboard() {
 
   const launch = () => {
     if (selection.size === 0) return;
+    // Compte view = virtual project bucket, no QBO. Block extraction
+    // and nudge the user toward selecting a real sister in the sidebar.
+    if (isCompteView) {
+      window.alert(
+        "Le Compte projet n'a pas de connexion QuickBooks — aucune extraction ne peut tourner depuis cette vue.\n\nSélectionne une vraie compagnie du projet dans la sidebar (Altitude / TDL / VSL…) pour lancer l'extraction.",
+      );
+      return;
+    }
     if (!company) return;
     // Partition the selection by entity. We refuse to send a row to QBO if
     // its booking entity doesn't match the active company — those would
@@ -176,7 +205,7 @@ export function Dashboard() {
       .map((id) => budget.find((b) => b.id === id))
       .filter((r): r is BudgetRow => !!r);
     const matching = selectedRows.filter((r) =>
-      rowBelongsToActiveCompany(r.bookingEntity, company, companies),
+      rowBelongsToActiveCompany(r.bookingEntity, company),
     );
     const foreign = selectedRows.length - matching.length;
     if (foreign > 0) {
@@ -528,11 +557,7 @@ export function Dashboard() {
                     row={it.row}
                     selected={selection.has(it.row.id)}
                     onToggle={() => toggleRow(it.row.id)}
-                    foreign={
-                      company
-                        ? !rowBelongsToActiveCompany(it.row.bookingEntity, company, companies)
-                        : false
-                    }
+                    foreign={!rowIsMine(it.row.bookingEntity)}
                     destinationLabel={
                       company
                         ? rowDestinationLabel(it.row.bookingEntity, company, companies, projects)
@@ -551,11 +576,7 @@ export function Dashboard() {
                     onToggleAllMembers={() =>
                       toggleGroupSelection(it.members.map((m) => m.id))
                     }
-                    foreign={
-                      company
-                        ? !rowBelongsToActiveCompany(it.members[0].bookingEntity, company, companies)
-                        : false
-                    }
+                    foreign={!rowIsMine(it.members[0].bookingEntity)}
                     destinationLabel={
                       company
                         ? rowDestinationLabel(it.members[0].bookingEntity, company, companies, projects)

@@ -38,31 +38,32 @@ export function bookingEntityMatchesCompany(
   return aliases.some((a) => normalizeEntity(a) === norm);
 }
 
-// True when the row "belongs to" the active company's QBO realm under the
-// refacturation routing rule: a direct match wins, but rows whose
-// bookingEntity doesn't match any *other* connected sister company also
-// belong to active by fallback. This catches the case where the
-// Fournisseur column says "VSL" or "Hydro-Québec" or any external
-// supplier — those bills live in the active project's QBO, not in a
-// sister's, so the Dashboard should keep showing them with their real
-// bookingEntity (e.g. "VSL") in the Entity column.
+// True when the row "belongs to" the active company under the
+// "mes entreprises" filter — i.e. the booking entity directly matches
+// one of active's aliases. Rows whose entity doesn't match any
+// company (Hydro-Québec, SATCOM…) belong to the project's virtual
+// Compte, not to active, so they're excluded here. The launch flow
+// also relies on this: refusing to query a fallback row against a
+// specific company's QBO realm avoids guaranteed "not found" hits.
 export function rowBelongsToActiveCompany(
   bookingEntity: string | null | undefined,
   activeCompany: { label: string; entityAliases?: string[] },
-  allCompanies: Array<{
-    label: string;
-    entityAliases?: string[];
-    connected?: boolean;
-  }>,
 ): boolean {
-  if (!bookingEntity) return true;
-  if (bookingEntityMatchesCompany(bookingEntity, activeCompany)) return true;
-  // Belongs elsewhere only if some OTHER connected sister claims it.
-  // Unconnected sisters (e.g. VSL with no QBO link yet) don't count —
-  // their rows fall back to the active company by definition.
-  for (const c of allCompanies) {
-    if (normalizeEntity(c.label) === normalizeEntity(activeCompany.label)) continue;
-    if (c.connected === false) continue;
+  if (!bookingEntity) return true; // unknown → don't penalize
+  return bookingEntityMatchesCompany(bookingEntity, activeCompany);
+}
+
+// True when the row belongs to the active project's virtual Compte —
+// i.e. its booking entity doesn't match any real company in the
+// project. Used for the Dashboard's "mes entreprises" filter when the
+// user has clicked Compte in the sidebar; rows here are exactly the
+// ones that show the "Compte [project]" chip.
+export function rowBelongsToActiveCompte(
+  bookingEntity: string | null | undefined,
+  projectCompanies: Array<{ label: string; entityAliases?: string[] }>,
+): boolean {
+  if (!bookingEntity) return true; // empty also routes to Compte chip
+  for (const c of projectCompanies) {
     if (bookingEntityMatchesCompany(bookingEntity, c)) return false;
   }
   return true;

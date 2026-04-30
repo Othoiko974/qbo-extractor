@@ -16,7 +16,18 @@ const NAV: { key: Screen; tKey: string; icon: string }[] = [
 
 export function Sidebar() {
   useLang(); // re-render on language change
-  const { companies, projects, activeCompanyKey, setActiveCompany, screen, setScreen, extraction } = useStore();
+  const {
+    companies,
+    projects,
+    activeCompanyKey,
+    activeView,
+    activeComptePid,
+    setActiveCompany,
+    setActiveCompte,
+    screen,
+    setScreen,
+    extraction,
+  } = useStore();
 
   const addNewCompany = () => {
     setActiveCompany(null);
@@ -45,7 +56,10 @@ export function Sidebar() {
         companies={companies}
         projects={projects}
         activeCompanyKey={activeCompanyKey}
+        activeView={activeView}
+        activeComptePid={activeComptePid}
         onPickCompany={setActiveCompany}
+        onPickCompte={setActiveCompte}
         onAddCompany={addNewCompany}
       />
 
@@ -105,19 +119,29 @@ function ProjectsAndCompanies({
   companies,
   projects,
   activeCompanyKey,
+  activeView,
+  activeComptePid,
   onPickCompany,
+  onPickCompte,
   onAddCompany,
 }: {
   companies: ReturnType<typeof useStore.getState>['companies'];
   projects: Project[];
   activeCompanyKey: string | null;
+  activeView: 'company' | 'compte';
+  activeComptePid: string | null;
   onPickCompany: (key: string) => void;
+  onPickCompte: (projectId: string) => void;
   onAddCompany: () => void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   const activeCompany = companies.find((c) => c.key === activeCompanyKey);
-  const activeProjectId = activeCompany?.projectId ?? null;
+  // Active project drives "expanded" state. In Compte view we still
+  // anchor on the project being viewed, otherwise on the active
+  // company's project.
+  const activeProjectId =
+    activeView === 'compte' ? activeComptePid : activeCompany?.projectId ?? null;
   const orphans = companies.filter((c) => !c.projectId);
 
   const toggle = (id: string) => {
@@ -174,10 +198,15 @@ function ProjectsAndCompanies({
                   <CompanyItem
                     key={c.key}
                     company={c}
-                    active={activeCompanyKey === c.key}
+                    active={activeView === 'company' && activeCompanyKey === c.key}
                     onClick={() => onPickCompany(c.key)}
                   />
                 ))}
+                <CompteItem
+                  projectName={p.name}
+                  active={activeView === 'compte' && activeComptePid === p.id}
+                  onClick={() => onPickCompte(p.id)}
+                />
               </div>
             )}
           </div>
@@ -203,7 +232,7 @@ function ProjectsAndCompanies({
             <CompanyItem
               key={c.key}
               company={c}
-              active={activeCompanyKey === c.key}
+              active={activeView === 'company' && activeCompanyKey === c.key}
               onClick={() => onPickCompany(c.key)}
             />
           ))}
@@ -217,6 +246,71 @@ function ProjectsAndCompanies({
       >
         <Icon name="plus" size={12} /> {t('sidebar.add_company')}
       </button>
+    </div>
+  );
+}
+
+// Virtual "Compte projet" entry that sits at the bottom of every project
+// group in the sidebar. Visually distinct from real companies — italic
+// label, neutral square instead of the company-color avatar — so the
+// user reads it as a project bucket rather than a switchable workspace.
+// Clicking it puts the Dashboard into Compte view (filter to fallback
+// rows; extraction guarded with a modal).
+function CompteItem({
+  projectName,
+  active,
+  onClick,
+}: {
+  projectName: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '6px 8px',
+        borderRadius: 6,
+        cursor: 'pointer',
+        background: active ? '#fff' : 'transparent',
+        border: active ? '1px solid var(--line)' : '1px solid transparent',
+        marginBottom: 2,
+        marginLeft: 4,
+      }}
+      title="Vue virtuelle : factures sans entreprise rattachée du projet. Pas d'extraction QBO possible."
+    >
+      <span
+        style={{
+          width: 22,
+          height: 22,
+          borderRadius: 5,
+          background: 'var(--paper-2)',
+          color: 'var(--muted)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          border: '1px dashed var(--line)',
+        }}
+      >
+        <Icon name="folder" size={11} />
+      </span>
+      <span
+        style={{
+          flex: 1,
+          fontSize: 12.5,
+          fontStyle: 'italic',
+          fontWeight: active ? 600 : 500,
+          color: 'var(--muted)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        Compte {projectName}
+      </span>
     </div>
   );
 }
