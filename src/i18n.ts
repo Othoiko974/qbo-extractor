@@ -181,14 +181,14 @@ const DICT: Record<Lang, Record<string, string>> = {
     'preview.title': 'Aperçu',
     'preview.open_default': "Ouvrir avec l'application par défaut",
     'preview.search_qbo': 'Rechercher dans QuickBooks',
-    'preview.reveal_finder': 'Afficher dans le Finder',
-    'preview.open_folder': 'Ouvrir le dossier dans le Finder',
+    'preview.reveal_finder': 'Afficher dans {fm}',
+    'preview.open_folder': 'Ouvrir le dossier dans {fm}',
     'preview.no_files': 'Aucun fichier extrait pour cette entreprise.',
     'preview.unsupported': 'Aperçu non disponible pour ce format.',
     'preview.select_a_file': 'Sélectionnez un fichier dans la liste à gauche.',
     'preview.open': 'Ouvrir',
     'preview.qbo': 'QBO',
-    'preview.finder': 'Finder',
+    'preview.finder': '{fm_short}',
 
     // History
     'history.title': 'Historique',
@@ -501,14 +501,14 @@ const DICT: Record<Lang, Record<string, string>> = {
     'preview.title': 'Preview',
     'preview.open_default': 'Open with default app',
     'preview.search_qbo': 'Search in QuickBooks',
-    'preview.reveal_finder': 'Reveal in Finder',
-    'preview.open_folder': 'Open folder in Finder',
+    'preview.reveal_finder': 'Reveal in {fm}',
+    'preview.open_folder': 'Open folder in {fm}',
     'preview.no_files': 'No files extracted for this company.',
     'preview.unsupported': 'Preview not available for this format.',
     'preview.select_a_file': 'Select a file in the list on the left.',
     'preview.open': 'Open',
     'preview.qbo': 'QBO',
-    'preview.finder': 'Finder',
+    'preview.finder': '{fm_short}',
 
     // History
     'history.title': 'History',
@@ -675,10 +675,46 @@ export function setLang(l: Lang): void {
   for (const cb of subscribers) cb();
 }
 
+// Detect the host platform once — exposed by preload as window.qboApi.platform
+// in Electron, falls back to user-agent sniffing for tests / dev tooling.
+function detectPlatform(): string {
+  if (typeof window !== 'undefined') {
+    const w = window as unknown as { qboApi?: { platform?: string } };
+    if (w.qboApi?.platform) return w.qboApi.platform;
+    if (typeof navigator !== 'undefined') {
+      const ua = navigator.userAgent.toLowerCase();
+      if (ua.includes('windows')) return 'win32';
+      if (ua.includes('mac')) return 'darwin';
+    }
+  }
+  return 'darwin';
+}
+
+function fileManagerArticled(platform: string): string {
+  if (platform === 'win32') return current === 'fr' ? "l'Explorateur" : 'Explorer';
+  if (platform === 'darwin') return current === 'fr' ? 'le Finder' : 'Finder';
+  return current === 'fr' ? 'le gestionnaire de fichiers' : 'the file manager';
+}
+
+function fileManagerShort(platform: string): string {
+  if (platform === 'win32') return current === 'fr' ? 'Explorateur' : 'Explorer';
+  if (platform === 'darwin') return 'Finder';
+  return current === 'fr' ? 'Fichiers' : 'Files';
+}
+
 export function t(key: string, params?: Record<string, string | number>): string {
   const raw = DICT[current][key] ?? DICT.fr[key] ?? key;
-  if (!params) return raw;
-  return raw.replace(/\{(\w+)\}/g, (_, k) => String(params[k] ?? `{${k}}`));
+  // Auto-substitute platform-conditional tokens so call sites don't have
+  // to thread platform through every t() invocation.
+  let out = raw;
+  if (out.includes('{fm}') || out.includes('{fm_short}')) {
+    const platform = detectPlatform();
+    out = out
+      .replace(/\{fm\}/g, fileManagerArticled(platform))
+      .replace(/\{fm_short\}/g, fileManagerShort(platform));
+  }
+  if (!params) return out;
+  return out.replace(/\{(\w+)\}/g, (_, k) => String(params[k] ?? `{${k}}`));
 }
 
 export function useLang(): Lang {
