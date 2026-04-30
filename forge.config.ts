@@ -33,6 +33,22 @@ const config: ForgeConfig = {
         schemes: ['qboextractor'],
       },
     ],
+    // Ad-hoc signing (identity '-') — gives the .app a self-signed
+    // signature without needing a paid Apple Developer ID. Without this
+    // Gatekeeper labels every download as "endommagé / damaged" and
+    // refuses to launch even with right-click → Open. With ad-hoc the
+    // worst the user sees is the "Unidentified Developer" prompt that
+    // bypasses on the first right-click → Open. Skipped entirely on
+    // non-darwin runners (linux/windows) where osxSign is a no-op.
+    osxSign: {
+      identity: '-',
+      optionsForFile: () => ({
+        // Hardened runtime + entitlements would require a real cert; skip
+        // them so the ad-hoc signature still validates against Gatekeeper
+        // at the basic level.
+        hardenedRuntime: false,
+      }),
+    },
     ignore: (file) => {
       if (!file) return false;
       if (file.startsWith('/.vite')) return false;
