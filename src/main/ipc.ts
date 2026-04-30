@@ -30,6 +30,11 @@ import { readExcelBudget } from './budget/excel';
 import { normalizeVendors } from './budget/normalize';
 import { ExtractionEngine } from './extraction/engine';
 import { onQboRequest, QboClient } from './qbo/client';
+import {
+  exportQboConnection,
+  importQboConnection,
+  peekPortableMeta,
+} from './qbo-portable';
 // unpdf is a Node-native PDF text extractor (no DOMMatrix / browser DOM
 // dependency, unlike pdf-parse@2 → pdfjs-dist which crashes Electron's
 // main process at module load with "ReferenceError: DOMMatrix is not
@@ -650,6 +655,73 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     RunRowCandidates.deleteByRow(runRowId);
     return { ok: true };
   });
+
+  // Export the current QBO realm + tokens as a passphrase-encrypted file
+  // so the OAuth-admin can hand the connection to a non-admin teammate
+  // (Intuit only allows admins to complete OAuth, so this side-step is
+  // the practical way to share a connection without elevating every
+  // employee). The renderer wraps this in a save dialog.
+  ipcMain.handle(
+    'qbo:exportConnection',
+    async (
+      _evt,
+      args: { companyKey: string; passphrase: string },
+    ) => {
+      const res = await exportQboConnection(args.companyKey, args.passphrase);
+      if (!res.ok || !res.data) return { ok: false, error: res.error ?? 'Échec de l\'export.' };
+      const dialogRes = await dialog.showSaveDialog({
+        title: 'Exporter la connexion QuickBooks',
+        defaultPath: `qbo-connection-${args.companyKey}-${new Date().toISOString().slice(0, 10)}.qboconnect`,
+        filters: [{ name: 'QBO Connection', extensions: ['qboconnect', 'json'] }],
+      });
+      if (dialogRes.canceled || !dialogRes.filePath) {
+        return { ok: false, error: 'Export annulé.' };
+      }
+      try {
+        fs.writeFileSync(dialogRes.filePath, res.data, 'utf8');
+        return { ok: true, filePath: dialogRes.filePath };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
+    },
+  );
+
+  // Show a file picker, peek the meta (no decryption needed) so the
+  // renderer can confirm the target company before asking for the
+  // passphrase. The actual decryption + persistence happens in
+  // qbo:importConnection once the user types the passphrase.
+  ipcMain.handle('qbo:peekImportFile', async () => {
+    const res = await dialog.showOpenDialog({
+      title: 'Choisir un fichier de connexion',
+      properties: ['openFile'],
+      filters: [{ name: 'QBO Connection', extensions: ['qboconnect', 'json'] }],
+    });
+    if (res.canceled || res.filePaths.length === 0) {
+      return { ok: false, error: 'Import annulé.' };
+    }
+    const filePath = res.filePaths[0];
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, 'utf8');
+    } catch (err) {
+      return { ok: false, error: errMsg(err) };
+    }
+    const meta = peekPortableMeta(content);
+    if (!meta) {
+      return { ok: false, error: 'Fichier non reconnu (format ou version invalide).' };
+    }
+    return { ok: true, filePath, content, meta };
+  });
+
+  ipcMain.handle(
+    'qbo:importConnection',
+    async (
+      _evt,
+      args: { companyKey: string; fileContent: string; passphrase: string },
+    ) => {
+      return importQboConnection(args.companyKey, args.fileContent, args.passphrase);
+    },
+  );
 
   // Quick-look style preview of the first attachable on a candidate's txn.
   // Fetches the file via QBO's signed-URL endpoint, drops it in

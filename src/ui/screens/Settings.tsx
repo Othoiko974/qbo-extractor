@@ -302,6 +302,18 @@ export function Settings() {
                 setActiveCompany(c.key);
                 setScreen('gsheets');
               }}
+              // Both routes land on the Connect screen which has the
+              // dedicated "Partage de connexion" section. Distinct
+              // handlers so we could later auto-scroll / pre-open the
+              // right form panel; for now they share the same target.
+              onExportQbo={() => {
+                setActiveCompany(c.key);
+                setScreen('connect');
+              }}
+              onImportQbo={() => {
+                setActiveCompany(c.key);
+                setScreen('connect');
+              }}
             />
           ))}
           <button
@@ -380,12 +392,16 @@ function CompanyEditor({
   onAliasesChange,
   onConfigureQbo,
   onConfigureBudget,
+  onExportQbo,
+  onImportQbo,
 }: {
   company: Company;
   onDelete: () => Promise<void>;
   onAliasesChange: (aliases: string[]) => Promise<void>;
   onConfigureQbo: () => void;
   onConfigureBudget: () => void;
+  onExportQbo: () => void;
+  onImportQbo: () => void;
 }) {
   const aliases =
     company.entityAliases && company.entityAliases.length > 0
@@ -451,6 +467,22 @@ function CompanyEditor({
         </button>
         <button className="btn btn-sm" onClick={onConfigureBudget} title={t('settings.configure_budget_title')}>
           <Icon name="sheet" size={11} /> {t('settings.configure_budget')}
+        </button>
+        {company.connected && (
+          <button
+            className="btn btn-sm"
+            onClick={onExportQbo}
+            title={t('settings.export_qbo_title')}
+          >
+            ⤓ {t('settings.export_qbo')}
+          </button>
+        )}
+        <button
+          className="btn btn-sm"
+          onClick={onImportQbo}
+          title={t('settings.import_qbo_title')}
+        >
+          ⤒ {t('settings.import_qbo')}
         </button>
         <button className="btn btn-sm btn-danger" onClick={() => void onDelete()}>
           {t('settings.delete')}

@@ -21,6 +21,103 @@ export function Connect() {
   const [realmId, setRealmId] = useState<string>('');
   const [testResult, setTestResult] = useState<string | null>(null);
 
+  // Portable connection share — admin exports, non-admin imports. Lets a
+  // QBO Standard User Full Access bypass the OAuth admin gate by
+  // receiving an encrypted token bundle from a teammate who already
+  // OAuth-connected on their own admin account.
+  const [showExportForm, setShowExportForm] = useState(false);
+  const [exportPass, setExportPass] = useState('');
+  const [exportPassConfirm, setExportPassConfirm] = useState('');
+  const [exportStatus, setExportStatus] = useState<{
+    kind: 'idle' | 'ok' | 'error';
+    msg?: string;
+  }>({ kind: 'idle' });
+  const [importMeta, setImportMeta] = useState<{
+    companyLabel: string;
+    realmId: string;
+    env: string;
+    exportedAt: string;
+  } | null>(null);
+  const [importContent, setImportContent] = useState<string>('');
+  const [importPass, setImportPass] = useState('');
+  const [importStatus, setImportStatus] = useState<{
+    kind: 'idle' | 'ok' | 'error';
+    msg?: string;
+  }>({ kind: 'idle' });
+
+  const handleExportConnection = async () => {
+    if (!activeCompanyKey) return;
+    if (exportPass.length < 8) {
+      setExportStatus({ kind: 'error', msg: 'Passphrase trop courte (minimum 8 caractères).' });
+      return;
+    }
+    if (exportPass !== exportPassConfirm) {
+      setExportStatus({ kind: 'error', msg: 'La confirmation ne correspond pas.' });
+      return;
+    }
+    setExportStatus({ kind: 'idle' });
+    const res = (await window.qboApi.qboExportConnection(
+      activeCompanyKey,
+      exportPass,
+    )) as { ok: boolean; filePath?: string; error?: string };
+    if (res.ok && res.filePath) {
+      setExportStatus({
+        kind: 'ok',
+        msg: `Exporté → ${res.filePath}. Envoie le fichier ET la passphrase à l'utilisateur (par canaux séparés idéalement).`,
+      });
+      setExportPass('');
+      setExportPassConfirm('');
+      setShowExportForm(false);
+    } else {
+      setExportStatus({ kind: 'error', msg: res.error ?? 'Échec.' });
+    }
+  };
+
+  const handlePickImport = async () => {
+    setImportStatus({ kind: 'idle' });
+    const res = (await window.qboApi.qboPeekImportFile()) as {
+      ok: boolean;
+      content?: string;
+      meta?: { companyLabel: string; realmId: string; env: string; exportedAt: string };
+      error?: string;
+    };
+    if (res.ok && res.meta && res.content) {
+      setImportMeta(res.meta);
+      setImportContent(res.content);
+    } else if (res.error && res.error !== 'Import annulé.') {
+      setImportStatus({ kind: 'error', msg: res.error });
+    }
+  };
+
+  const handleImportConnection = async () => {
+    if (!activeCompanyKey || !importContent) return;
+    if (!importPass) {
+      setImportStatus({ kind: 'error', msg: 'Passphrase requise.' });
+      return;
+    }
+    const res = (await window.qboApi.qboImportConnection(
+      activeCompanyKey,
+      importContent,
+      importPass,
+    )) as {
+      ok: boolean;
+      meta?: { companyLabel: string };
+      error?: string;
+    };
+    if (res.ok) {
+      setImportStatus({
+        kind: 'ok',
+        msg: `Connexion importée pour ${res.meta?.companyLabel ?? company?.label ?? 'cette compagnie'}.`,
+      });
+      setImportPass('');
+      setImportMeta(null);
+      setImportContent('');
+      await loadCompanies();
+    } else {
+      setImportStatus({ kind: 'error', msg: res.error ?? 'Échec.' });
+    }
+  };
+
   // Intuit app credentials (client_id / client_secret) — stored encrypted.
   const [credsConfigured, setCredsConfigured] = useState(false);
   const [credsPreview, setCredsPreview] = useState<string | null>(null);
@@ -572,6 +669,138 @@ export function Connect() {
                 {testResult}
               </pre>
             )}
+
+            <div className="divider-h" style={{ margin: '20px 0' }} />
+
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              Partage de connexion (admin → utilisateur non-admin)
+            </div>
+            <div className="muted" style={{ fontSize: 11.5, marginBottom: 12 }}>
+              Intuit n'autorise que les comptes admin à compléter le flow OAuth.
+              Si tu (admin) connectes ici, tu peux exporter cette connexion dans
+              un fichier chiffré (.qboconnect) avec une passphrase. Un utilisateur
+              Standard User Full Access importe ensuite ce fichier dans son app
+              sans avoir à OAuth-connect lui-même.
+            </div>
+
+            {company?.connected && (
+              <div style={{ marginBottom: 14 }}>
+                {!showExportForm ? (
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => {
+                      setShowExportForm(true);
+                      setExportStatus({ kind: 'idle' });
+                    }}
+                  >
+                    Exporter cette connexion
+                  </button>
+                ) : (
+                  <div className="card-surface" style={{ padding: 12 }}>
+                    <Field label="Passphrase (min. 8 caractères)">
+                      <input
+                        className="input"
+                        type="password"
+                        value={exportPass}
+                        onChange={(e) => setExportPass(e.target.value)}
+                        placeholder="Choisis une passphrase forte"
+                      />
+                    </Field>
+                    <Field label="Confirmer la passphrase">
+                      <input
+                        className="input"
+                        type="password"
+                        value={exportPassConfirm}
+                        onChange={(e) => setExportPassConfirm(e.target.value)}
+                      />
+                    </Field>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button className="btn btn-sm" onClick={handleExportConnection}>
+                        Exporter…
+                      </button>
+                      <button
+                        className="btn btn-sm btn-ghost"
+                        onClick={() => {
+                          setShowExportForm(false);
+                          setExportPass('');
+                          setExportPassConfirm('');
+                          setExportStatus({ kind: 'idle' });
+                        }}
+                      >
+                        Annuler
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {exportStatus.kind === 'ok' && (
+                  <div style={{ marginTop: 8, color: 'var(--ok)', fontSize: 11.5 }}>
+                    {exportStatus.msg}
+                  </div>
+                )}
+                {exportStatus.kind === 'error' && (
+                  <div style={{ marginTop: 8, color: 'var(--err)', fontSize: 11.5 }}>
+                    {exportStatus.msg}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div>
+              {!importMeta ? (
+                <button className="btn btn-sm" onClick={handlePickImport}>
+                  Importer une connexion (.qboconnect)
+                </button>
+              ) : (
+                <div className="card-surface" style={{ padding: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
+                    Fichier de : {importMeta.companyLabel}
+                  </div>
+                  <div className="muted" style={{ fontSize: 11, marginBottom: 12 }}>
+                    Realm: <span className="mono">{importMeta.realmId}</span> ·{' '}
+                    {importMeta.env} · Exporté le{' '}
+                    {new Date(importMeta.exportedAt).toLocaleString()}
+                  </div>
+                  <Field label="Passphrase reçue de l'admin">
+                    <input
+                      className="input"
+                      type="password"
+                      value={importPass}
+                      onChange={(e) => setImportPass(e.target.value)}
+                    />
+                  </Field>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      className="btn btn-sm"
+                      onClick={handleImportConnection}
+                      disabled={!importPass}
+                    >
+                      Importer dans {company?.label ?? 'cette compagnie'}
+                    </button>
+                    <button
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => {
+                        setImportMeta(null);
+                        setImportContent('');
+                        setImportPass('');
+                        setImportStatus({ kind: 'idle' });
+                      }}
+                    >
+                      Annuler
+                    </button>
+                  </div>
+                </div>
+              )}
+              {importStatus.kind === 'ok' && (
+                <div style={{ marginTop: 8, color: 'var(--ok)', fontSize: 11.5 }}>
+                  {importStatus.msg}
+                </div>
+              )}
+              {importStatus.kind === 'error' && (
+                <div style={{ marginTop: 8, color: 'var(--err)', fontSize: 11.5 }}>
+                  {importStatus.msg}
+                </div>
+              )}
+            </div>
 
             <div style={{ marginTop: 24 }}>
               <button className="btn btn-sm" onClick={() => setScreen('gsheets')}>

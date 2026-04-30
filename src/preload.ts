@@ -221,6 +221,11 @@ const api = {
     ipcRenderer.invoke('extraction:rejectAmbiguous', { runRowId, rowId }),
   searchInSisters: (activeCompanyKey: string, docNumber: string) =>
     ipcRenderer.invoke('qbo:searchInSisters', { activeCompanyKey, docNumber }),
+  qboExportConnection: (companyKey: string, passphrase: string) =>
+    ipcRenderer.invoke('qbo:exportConnection', { companyKey, passphrase }),
+  qboPeekImportFile: () => ipcRenderer.invoke('qbo:peekImportFile'),
+  qboImportConnection: (companyKey: string, fileContent: string, passphrase: string) =>
+    ipcRenderer.invoke('qbo:importConnection', { companyKey, fileContent, passphrase }),
   previewAttachable: (
     companyKey: string,
     txnId: string,
