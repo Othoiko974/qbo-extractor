@@ -1061,13 +1061,54 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     await shell.openExternal(url);
     return { ok: true };
   });
-  // Used by the in-app update-checker (renderer fetches the latest
-  // GitHub release tag and compares against this). Kept on the IPC
-  // surface rather than reading process.env in the renderer so the
-  // version stays the bundled package.json one — process.env in the
-  // renderer wouldn't reflect the production app's version anyway.
+  // Used by the in-app update-checker. The version stays the bundled
+  // package.json one — reading process.env in the renderer wouldn't
+  // reflect the production app's version anyway.
   ipcMain.handle('app:version', async () => {
     return app.getVersion();
+  });
+
+  // Update check — runs in main rather than the renderer because the
+  // renderer's CSP only allows connections to *.intuit.com and
+  // *.googleapis.com (we don't want to widen it for a single
+  // GitHub-API hit). Returns `{ latest: { version, url, publishedAt } }`
+  // when a strictly newer tag exists on
+  // https://github.com/Othoiko974/qbo-extractor/releases/latest, or
+  // `{ latest: null }` otherwise. Network failures are reported as
+  // `{ latest: null, offline: true }` so the renderer can stay quiet.
+  ipcMain.handle('app:checkForUpdate', async () => {
+    try {
+      const r = await fetch(
+        'https://api.github.com/repos/Othoiko974/qbo-extractor/releases/latest',
+        {
+          headers: { Accept: 'application/vnd.github+json' },
+          // Reasonable timeout so the boot-time check doesn't hang the
+          // renderer's banner state if GitHub is slow / unreachable.
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
+      if (!r.ok) return { latest: null, error: `HTTP ${r.status}` };
+      const data = (await r.json()) as {
+        tag_name?: string;
+        html_url?: string;
+        published_at?: string;
+      };
+      const tag = (data.tag_name ?? '').replace(/^v/, '');
+      if (!tag) return { latest: null };
+      const current = app.getVersion();
+      if (!semverGt(tag, current)) return { latest: null };
+      return {
+        latest: {
+          version: tag,
+          url:
+            data.html_url ??
+            'https://github.com/Othoiko974/qbo-extractor/releases/latest',
+          publishedAt: data.published_at ?? '',
+        },
+      };
+    } catch (err) {
+      return { latest: null, offline: true, error: errMsg(err) };
+    }
   });
   ipcMain.handle('fs:revealFile', async (_evt, filePath: string) => {
     shell.showItemInFolder(filePath);
@@ -1234,6 +1275,29 @@ function toClientCompany(c: ReturnType<typeof Companies.get> & object) {
     gsheetsConnected: !!c.gsheets_connected,
     entityAliases: safeJsonArray(c.entity_aliases),
   };
+}
+
+// Tiny semver compare used by the update checker. Splits into numeric
+// segments and compares element-wise; pre-release suffixes are ignored
+// so a stable v0.2.0 doesn't trigger an upgrade prompt for someone on
+// v0.2.0-rc1. Returns true iff `a` is strictly greater than `b`.
+function semverGt(a: string, b: string): boolean {
+  const parse = (v: string) =>
+    v
+      .split('-')[0]
+      .split('.')
+      .map((s) => parseInt(s, 10))
+      .map((n) => (Number.isFinite(n) ? n : 0));
+  const aa = parse(a);
+  const bb = parse(b);
+  const len = Math.max(aa.length, bb.length);
+  for (let i = 0; i < len; i++) {
+    const x = aa[i] ?? 0;
+    const y = bb[i] ?? 0;
+    if (x > y) return true;
+    if (x < y) return false;
+  }
+  return false;
 }
 
 function errMsg(err: unknown): string {

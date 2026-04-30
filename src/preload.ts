@@ -277,6 +277,14 @@ const api = {
   // App-level — used by the update banner to compare current install
   // against the latest GitHub release tag.
   appVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
+  // Polls GitHub Releases via main (renderer CSP doesn't allow
+  // outbound connections to api.github.com — and we don't want to
+  // widen it for a single update check).
+  checkForUpdate: (): Promise<{
+    latest: { version: string; url: string; publishedAt: string } | null;
+    offline?: boolean;
+    error?: string;
+  }> => ipcRenderer.invoke('app:checkForUpdate'),
 
   // Static — host platform exposed to the renderer so UI strings can
   // adapt: "Finder" on darwin, "Explorateur" on win32, generic
