@@ -68,6 +68,29 @@ export function rowBelongsToActiveCompany(
   return true;
 }
 
+// Returns the label of whichever company's QBO realm the row will be
+// queried against — drives the Dashboard's entity chip text. Direct
+// match on a connected sister wins (Altitude / TDL); everything else
+// (external suppliers like Hydro / SATCOM, plus unconnected sisters
+// like VSL) routes to active's label so the chip reflects the actual
+// extraction destination instead of the budget's supplier name.
+export function rowDestinationLabel(
+  bookingEntity: string | null | undefined,
+  activeCompany: { label: string; entityAliases?: string[] },
+  allCompanies: Array<{
+    label: string;
+    entityAliases?: string[];
+    connected?: boolean;
+  }>,
+): string {
+  if (!bookingEntity) return activeCompany.label;
+  for (const c of allCompanies) {
+    if (c.connected === false) continue;
+    if (bookingEntityMatchesCompany(bookingEntity, c)) return c.label;
+  }
+  return activeCompany.label;
+}
+
 // Distinct booking entities surfaced from a list of rows, useful for the
 // "Hors entreprise" KPI tooltip and the Settings auto-suggest.
 export function distinctEntities(

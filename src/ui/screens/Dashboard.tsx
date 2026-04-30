@@ -3,7 +3,7 @@ import { useStore } from '../../store/store';
 import { Icon, fmtCurrency } from '../Icon';
 import type { BudgetRow } from '../../types/domain';
 import { t, useLang } from '../../i18n';
-import { rowBelongsToActiveCompany } from '../../shared/entity';
+import { rowBelongsToActiveCompany, rowDestinationLabel } from '../../shared/entity';
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
 import { Tooltip } from '../Tooltip';
 
@@ -532,6 +532,11 @@ export function Dashboard() {
                         ? !rowBelongsToActiveCompany(it.row.bookingEntity, company, companies)
                         : false
                     }
+                    destinationLabel={
+                      company
+                        ? rowDestinationLabel(it.row.bookingEntity, company, companies)
+                        : undefined
+                    }
                   />
                 ) : (
                   <GroupRows
@@ -549,6 +554,11 @@ export function Dashboard() {
                       company
                         ? !rowBelongsToActiveCompany(it.members[0].bookingEntity, company, companies)
                         : false
+                    }
+                    destinationLabel={
+                      company
+                        ? rowDestinationLabel(it.members[0].bookingEntity, company, companies)
+                        : undefined
                     }
                   />
                 ),
@@ -688,11 +698,17 @@ function Row({
   selected,
   onToggle,
   foreign,
+  destinationLabel,
 }: {
   row: BudgetRow;
   selected: boolean;
   onToggle: () => void;
   foreign?: boolean;
+  // Label of the company whose QBO realm will receive this row's
+  // search query — overrides the chip text so external suppliers
+  // (Hydro / SATCOM / L2V4) and unconnected sisters (VSL) all show
+  // the active company's name instead of their bookingEntity.
+  destinationLabel?: string;
 }) {
   const [commentExpanded, setCommentExpanded] = useState(false);
   return (
@@ -768,13 +784,21 @@ function Row({
         )}
       </td>
       <td style={{ fontSize: 11.5 }}>
-        {row.bookingEntity ? (
+        {(destinationLabel || row.bookingEntity) ? (
           <span
             className={`chip ${foreign ? 'chip-warn' : ''}`}
             style={{ fontSize: 10.5 }}
-            title={foreign ? t('dashboard.entity_scope.row_foreign') : undefined}
+            // Tooltip preserves the raw budget value when we override the
+            // chip text — the user can hover to see "Hydro-Québec" etc.
+            title={
+              foreign
+                ? t('dashboard.entity_scope.row_foreign')
+                : destinationLabel && row.bookingEntity && destinationLabel !== row.bookingEntity
+                  ? `brut : ${row.bookingEntity}`
+                  : undefined
+            }
           >
-            {row.bookingEntity}
+            {destinationLabel ?? row.bookingEntity}
           </span>
         ) : (
           <span style={{ color: 'var(--muted-2)' }}>—</span>
@@ -820,6 +844,7 @@ function GroupRows({
   onToggleMember,
   onToggleAllMembers,
   foreign,
+  destinationLabel,
 }: {
   members: BudgetRow[];
   total: number;
@@ -829,6 +854,7 @@ function GroupRows({
   onToggleMember: (id: string) => void;
   onToggleAllMembers: () => void;
   foreign?: boolean;
+  destinationLabel?: string;
 }) {
   const head = members[0];
   const allSelected = members.every((m) => selection.has(m.id));
@@ -932,13 +958,19 @@ function GroupRows({
           )}
         </td>
         <td style={{ fontSize: 11.5 }}>
-          {head.bookingEntity ? (
+          {(destinationLabel || head.bookingEntity) ? (
             <span
               className={`chip ${foreign ? 'chip-warn' : ''}`}
               style={{ fontSize: 10.5 }}
-              title={foreign ? t('dashboard.entity_scope.row_foreign') : undefined}
+              title={
+                foreign
+                  ? t('dashboard.entity_scope.row_foreign')
+                  : destinationLabel && head.bookingEntity && destinationLabel !== head.bookingEntity
+                    ? `brut : ${head.bookingEntity}`
+                    : undefined
+              }
             >
-              {head.bookingEntity}
+              {destinationLabel ?? head.bookingEntity}
             </span>
           ) : (
             <span style={{ color: 'var(--muted-2)' }}>—</span>
