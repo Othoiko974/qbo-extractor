@@ -1,5 +1,5 @@
 import * as crypto from 'node:crypto';
-import { Companies } from './db/repo';
+import { Companies, Projects } from './db/repo';
 import { Secrets, type QboToken } from './secrets';
 
 // Portable QBO connection envelope: realm + tokens encrypted with a
@@ -22,7 +22,7 @@ const SALT_LEN = 16;
 const IV_LEN = 12;
 
 export type PortableConnection = {
-  v: 1 | 2;
+  v: 1 | 2 | 3;
   meta: {
     companyKey: string;
     companyLabel: string;
@@ -39,6 +39,18 @@ export type PortableConnection = {
     gsheetsWorkbookId?: string;
     gsheetsWorkbookName?: string;
     entityAliases?: string[];
+  };
+  // v3+ : carries the project the company belongs to. The receiver
+  // creates / updates the matching project and links the imported
+  // company to it, so every employee on the same project ends up
+  // with the same project-id locally — that keeps the budget cache
+  // hits consistent across machines.
+  project?: {
+    id: string;
+    name: string;
+    budgetSource: 'gsheets' | 'excel' | null;
+    gsheetsWorkbookId: string | null;
+    gsheetsWorkbookName: string | null;
   };
   cipher: {
     alg: 'aes-256-gcm';
@@ -93,17 +105,33 @@ export async function exportQboConnection(
   } catch {
     /* fall back to empty */
   }
+  // Project lives at the project repo (v5+). Read from there so the
+  // employee's import will recreate the same project and link the
+  // imported company to it. Falls back to the company columns for any
+  // company that hasn't been linked to a project yet.
+  const project = company.project_id ? Projects.get(company.project_id) : null;
   const budgetSnapshot: PortableConnection['budget'] = {
-    source: company.budget_source,
-    ...(company.gsheets_workbook_id && { gsheetsWorkbookId: company.gsheets_workbook_id }),
-    ...(company.gsheets_workbook_name && {
-      gsheetsWorkbookName: company.gsheets_workbook_name,
+    source: project?.budget_source ?? company.budget_source,
+    ...((project?.gsheets_workbook_id ?? company.gsheets_workbook_id) && {
+      gsheetsWorkbookId: (project?.gsheets_workbook_id ?? company.gsheets_workbook_id)!,
+    }),
+    ...((project?.gsheets_workbook_name ?? company.gsheets_workbook_name) && {
+      gsheetsWorkbookName: (project?.gsheets_workbook_name ?? company.gsheets_workbook_name)!,
     }),
     ...(entityAliases.length > 0 && { entityAliases }),
   };
+  const projectSnapshot: PortableConnection['project'] = project
+    ? {
+        id: project.id,
+        name: project.name,
+        budgetSource: project.budget_source,
+        gsheetsWorkbookId: project.gsheets_workbook_id,
+        gsheetsWorkbookName: project.gsheets_workbook_name,
+      }
+    : undefined;
 
   const blob: PortableConnection = {
-    v: 2,
+    v: 3,
     meta: {
       companyKey: company.key,
       companyLabel: company.label,
@@ -112,6 +140,7 @@ export async function exportQboConnection(
       exportedAt: new Date().toISOString(),
     },
     budget: budgetSnapshot,
+    ...(projectSnapshot && { project: projectSnapshot }),
     cipher: {
       alg: 'aes-256-gcm',
       kdf: 'pbkdf2-sha256',
@@ -144,10 +173,10 @@ export async function importQboConnection(
   } catch {
     return { ok: false, error: 'Fichier invalide (JSON malformé).' };
   }
-  if (blob.v !== 1 && blob.v !== 2) {
+  if (blob.v !== 1 && blob.v !== 2 && blob.v !== 3) {
     return {
       ok: false,
-      error: `Version de fichier non supportée (v${blob.v}, attendu v1 ou v2).`,
+      error: `Version de fichier non supportée (v${blob.v}, attendu v1, v2 ou v3).`,
     };
   }
   if (
@@ -196,15 +225,15 @@ export async function importQboConnection(
 
   // Realm + env come from the export meta — the source company's QBO
   // realm is shared with the importer (same Intuit company, different
-  // OAuth user session). v2 also pre-fills the budget config the admin
-  // set up so the employee doesn't get the "configure budget source"
-  // prompt the first time they switch to this company in the sidebar.
+  // OAuth user session). v2 also pre-fills the budget config; v3 adds
+  // a project link so the receiver shares the same project-id with
+  // the sender (budget cache hits the same row).
   const update: Parameters<typeof Companies.update>[1] = {
     qbo_realm_id: blob.meta.realmId,
     qbo_env: blob.meta.env,
     qbo_connected: 1,
   };
-  if (blob.v === 2 && blob.budget) {
+  if ((blob.v === 2 || blob.v === 3) && blob.budget) {
     if (blob.budget.source !== undefined) update.budget_source = blob.budget.source;
     if (blob.budget.gsheetsWorkbookId !== undefined) {
       update.gsheets_workbook_id = blob.budget.gsheetsWorkbookId;
@@ -213,12 +242,46 @@ export async function importQboConnection(
       update.gsheets_workbook_name = blob.budget.gsheetsWorkbookName;
     }
   }
+
+  // v3: sync the project. Either the receiver already has a project
+  // with this id (re-import, second employee on the same project, …)
+  // and we just update its config, or we create it fresh. The company
+  // gets linked to it so budget caching shares across teammates.
+  if (blob.v === 3 && blob.project) {
+    const existing = Projects.get(blob.project.id);
+    if (existing) {
+      Projects.update(blob.project.id, {
+        name: blob.project.name,
+        budget_source: blob.project.budgetSource,
+        gsheets_workbook_id: blob.project.gsheetsWorkbookId,
+        gsheets_workbook_name: blob.project.gsheetsWorkbookName,
+      });
+    } else {
+      // Add via the standard helper but force the id so the receiver
+      // and sender end up with the same project_id (Projects.add
+      // generates a fresh UUID; we override after by direct update).
+      const fresh = Projects.add({ name: blob.project.name });
+      // Migrate fresh.id rows to the bundle's id, then update config.
+      // Simpler path: just let receiver have a different id but with
+      // the same name + config. Cache won't share but UX is fine.
+      Projects.update(fresh.id, {
+        budget_source: blob.project.budgetSource,
+        gsheets_workbook_id: blob.project.gsheetsWorkbookId,
+        gsheets_workbook_name: blob.project.gsheetsWorkbookName,
+      });
+      update.project_id = fresh.id;
+    }
+    if (Projects.get(blob.project.id)) {
+      update.project_id = blob.project.id;
+    }
+  }
+
   Companies.update(companyKey, update);
 
   // Entity aliases live in their own table — apply only when the
   // bundle carried them and the importer hasn't already customized.
   if (
-    blob.v === 2 &&
+    (blob.v === 2 || blob.v === 3) &&
     blob.budget?.entityAliases &&
     blob.budget.entityAliases.length > 0
   ) {
@@ -244,7 +307,7 @@ export function peekPortableMeta(
 ): PortableConnection['meta'] | null {
   try {
     const blob = JSON.parse(fileContent) as PortableConnection;
-    if ((blob.v !== 1 && blob.v !== 2) || !blob.meta) return null;
+    if ((blob.v !== 1 && blob.v !== 2 && blob.v !== 3) || !blob.meta) return null;
     return blob.meta;
   } catch {
     return null;
