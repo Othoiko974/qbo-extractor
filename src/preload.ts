@@ -195,6 +195,10 @@ const api = {
   extractionPause: () => ipcRenderer.invoke('extraction:pause'),
   extractionResume: () => ipcRenderer.invoke('extraction:resume'),
   extractionStop: () => ipcRenderer.invoke('extraction:stop'),
+  extractionEstimate: (rowCount: number) =>
+    ipcRenderer.invoke('extraction:estimate', rowCount),
+  extractionLockStatus: (companyKey: string) =>
+    ipcRenderer.invoke('extraction:lockStatus', companyKey),
   onExtractionUpdate: (cb: (update: unknown) => void) => {
     const handler = (_: Electron.IpcRendererEvent, update: unknown) => cb(update);
     ipcRenderer.on('extraction:update', handler);

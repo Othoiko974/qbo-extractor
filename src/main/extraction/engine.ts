@@ -5,6 +5,11 @@ import type { BudgetRow, ExtractionStatus } from '../../types/domain';
 import { type QboBill } from '../qbo/client';
 import { createQboClient, type QboLike } from '../qbo/factory';
 import { isProxyMode, getProxyConfig } from '../qbo/proxy-client';
+import {
+  claimExtraction,
+  heartbeatExtraction,
+  releaseExtraction,
+} from '../qbo/extraction-lock';
 import { Companies, Runs, RunRows, RunRowCandidates, Settings, type RunRow, type RunRowRow } from '../db/repo';
 import { Secrets } from '../secrets';
 import { applyTemplate, applyFolderTemplate, extensionFromContentType } from './naming';
@@ -45,6 +50,9 @@ type Controller = {
   total: number;
   done: number;
   wake?: () => void;
+  // Heartbeat timer that keeps the proxy-side extraction lock alive while
+  // this run is in progress. Cleared on stop/finish/error.
+  heartbeatTimer?: NodeJS.Timeout;
 };
 
 export class ExtractionEngine {
@@ -74,7 +82,34 @@ export class ExtractionEngine {
     }
   }
 
-  async start(companyKey: string, rows: BudgetRow[]): Promise<{ runId: string } | { error: string }> {
+  // Single cleanup path — clears the heartbeat timer, releases the
+  // proxy lock, and zeroes `current`. Called from start()'s .finally
+  // so it runs whether the loop completed, errored, or was cancelled.
+  private cleanupRun(companyKey: string): void {
+    if (this.current?.heartbeatTimer) {
+      clearInterval(this.current.heartbeatTimer);
+    }
+    this.current = null;
+    void releaseExtraction(companyKey);
+  }
+
+  async start(
+    companyKey: string,
+    rows: BudgetRow[],
+  ): Promise<
+    | { runId: string }
+    | { error: string }
+    | {
+        busy: {
+          api_key_label: string;
+          total_rows: number;
+          estimated_requests: number;
+          started_at: number;
+          last_heartbeat: number;
+          eta_seconds: number;
+        };
+      }
+  > {
     if (this.isRunning()) return { error: 'Une extraction est déjà en cours.' };
 
     const company = Companies.get(companyKey);
@@ -86,6 +121,15 @@ export class ExtractionEngine {
     } else {
       const token = await Secrets.getQbo(companyKey);
       if (!token) return { error: 'Token QBO manquant — reconnecter QuickBooks.' };
+    }
+
+    // Reserve the proxy-side lock for this realm before we start writing
+    // rows to the DB. If another teammate is already running, we surface
+    // their context to the caller without committing any local state.
+    const claim = await claimExtraction(companyKey, rows.length);
+    if (!claim.ok) {
+      if ('busy' in claim) return { busy: claim.busy };
+      return { error: claim.error };
     }
 
     log.info('extraction', 'start', {
@@ -135,22 +179,33 @@ export class ExtractionEngine {
       done: 0,
     };
 
+    // Heartbeat the lock every 60s. Server TTL is 5 min, so a single
+    // missed beat (network blip) doesn't drop the lock.
+    if (isProxyMode()) {
+      this.current.heartbeatTimer = setInterval(() => {
+        void heartbeatExtraction(companyKey);
+      }, 60_000);
+    }
+
     const client = createQboClient(companyKey, company.qbo_realm_id, company.qbo_env);
 
     // Fire and forget; progress streams via IPC.
-    this.runLoop(run, rows, persisted, client, companyFolder, template, folderTemplate).catch((err) => {
-      console.error('[extraction] fatal', err);
-      Runs.setStatus(run.id, 'cancelled');
-      this.emitUpdate({
-        runId: run.id,
-        rowId: '',
-        status: 'nf',
-        error: err instanceof Error ? err.message : String(err),
-        counts: { ...this.current!.counts, total: this.current!.total, done: this.current!.done },
-        finished: true,
+    this.runLoop(run, rows, persisted, client, companyFolder, template, folderTemplate)
+      .catch((err) => {
+        console.error('[extraction] fatal', err);
+        Runs.setStatus(run.id, 'cancelled');
+        this.emitUpdate({
+          runId: run.id,
+          rowId: '',
+          status: 'nf',
+          error: err instanceof Error ? err.message : String(err),
+          counts: { ...this.current!.counts, total: this.current!.total, done: this.current!.done },
+          finished: true,
+        });
+      })
+      .finally(() => {
+        this.cleanupRun(companyKey);
       });
-      this.current = null;
-    });
 
     return { runId: run.id };
   }
@@ -181,7 +236,9 @@ export class ExtractionEngine {
           counts: { ...this.current.counts, total: this.current.total, done: this.current.done },
           finished: true,
         });
-        this.current = null;
+        // cleanupRun (in .finally) clears the heartbeat timer + releases
+        // the lock — don't null `current` here or the cleanup loses the
+        // timer reference and leaks the interval.
         return;
       }
 
@@ -237,7 +294,8 @@ export class ExtractionEngine {
       counts: { ...this.current!.counts, total: this.current!.total, done: this.current!.done },
       finished: true,
     });
-    this.current = null;
+    // cleanupRun (in .finally) handles `current = null` + heartbeat clear
+    // + lock release.
   }
 
   private async processRow(

@@ -495,8 +495,14 @@ export function Dashboard() {
             disabled={selection.size === 0 || !company?.connected}
             onClick={launch}
             style={{ opacity: selection.size === 0 ? 0.5 : 1 }}
+            title={
+              selection.size > 0
+                ? `~${selection.size * 8} requêtes estimées (limite QBO 500/min)`
+                : ''
+            }
           >
-            <Icon name="play" size={12} /> {t('dashboard.launch')} ({selection.size})
+            <Icon name="play" size={12} /> {t('dashboard.launch')} ({selection.size}
+            {selection.size > 0 ? ` · ~${selection.size * 8} req` : ''})
           </button>
         </div>
 
@@ -644,9 +650,14 @@ export function Dashboard() {
               '0 12px 28px rgba(46,77,57,0.32), 0 4px 8px rgba(0,0,0,0.12)',
             borderRadius: 999,
           }}
-          title={t('dashboard.launch')}
+          title={
+            selection.size > 0
+              ? `~${selection.size * 8} requêtes estimées (limite QBO 500/min)`
+              : t('dashboard.launch')
+          }
         >
-          <Icon name="play" size={13} /> {t('dashboard.launch')} ({selection.size})
+          <Icon name="play" size={13} /> {t('dashboard.launch')} ({selection.size}
+          {selection.size > 0 ? ` · ~${selection.size * 8} req` : ''})
         </button>
       </div>
     </div>

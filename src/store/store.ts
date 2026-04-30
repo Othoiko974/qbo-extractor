@@ -76,6 +76,22 @@ type Store = {
   qboRequestTimes: number[];
   pushQboRequestTime: (ts: number) => void;
 
+  // Cross-machine extraction lock state. Populated when startExtraction
+  // hits a 409 from the proxy — the dialog reads this and offers to wait
+  // (poll the proxy every 10 s) or cancel. Cleared once the lock frees
+  // and the run actually starts.
+  busyLock: {
+    api_key_label: string;
+    total_rows: number;
+    estimated_requests: number;
+    started_at: number;
+    last_heartbeat: number;
+    eta_seconds: number;
+    pendingRowIds: string[]; // remembered so we can retry when free
+  } | null;
+  dismissBusyLock: () => void;
+  retryBusyLock: () => Promise<void>;
+
   setScreen: (s: Screen) => void;
   openPreview: (filePath: string) => void;
   openResolver: (rowId: string) => Promise<void>;
@@ -129,6 +145,7 @@ export const useStore = create<Store>((set, get) => ({
   resolverSisterLoading: false,
   resolverSisterSearched: false,
   qboRequestTimes: [],
+  busyLock: null,
 
   pushQboRequestTime: (ts) =>
     set((s) => {
@@ -337,17 +354,46 @@ export const useStore = create<Store>((set, get) => ({
       paused: false,
       screen: 'extraction',
       error: null,
+      busyLock: null,
     });
     const res = (await window.qboApi.extractionStart(key, rowIds)) as {
       ok: boolean;
       runId?: string;
       error?: string;
+      busy?: {
+        api_key_label: string;
+        total_rows: number;
+        estimated_requests: number;
+        started_at: number;
+        last_heartbeat: number;
+        eta_seconds: number;
+      };
     };
+    if (res.busy) {
+      // Another teammate holds the lock. Park the row selection so the
+      // "Attendre" path can retry once the lock frees, and roll the UI
+      // back to dashboard so the user isn't stuck on an empty Extraction
+      // screen mid-modal.
+      set({
+        running: false,
+        busyLock: { ...res.busy, pendingRowIds: rowIds },
+        screen: 'dashboard',
+      });
+      return;
+    }
     if (!res.ok) {
       set({ running: false, error: res.error ?? 'Démarrage impossible.' });
       return;
     }
     set({ runId: res.runId ?? null });
+  },
+
+  dismissBusyLock: () => set({ busyLock: null }),
+
+  retryBusyLock: async () => {
+    const lock = get().busyLock;
+    if (!lock) return;
+    await get().startExtraction(lock.pendingRowIds);
   },
 
   pauseExtraction: async () => {

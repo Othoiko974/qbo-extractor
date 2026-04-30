@@ -45,6 +45,11 @@ import { createQboClient } from './qbo/factory';
 import { isProxyMode, pingProxyHealth } from './qbo/proxy-client';
 import { startPairing } from './qbo/proxy-pair';
 import {
+  estimateRequests,
+  estimateDurationSec,
+  inspectExtraction,
+} from './qbo/extraction-lock';
+import {
   exportQboConnection,
   importQboConnection,
   peekPortableMeta,
@@ -209,6 +214,18 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
 
   ipcMain.handle('qbo:proxy:test', async (_evt, companyKey: string) => {
     return pingProxyHealth(companyKey);
+  });
+
+  ipcMain.handle('extraction:estimate', async (_evt, rowCount: number) => {
+    return {
+      requests: estimateRequests(rowCount),
+      duration_sec: estimateDurationSec(rowCount),
+      requests_per_minute_cap: 500,
+    };
+  });
+
+  ipcMain.handle('extraction:lockStatus', async (_evt, companyKey: string) => {
+    return inspectExtraction(companyKey);
   });
 
   ipcMain.handle('qbo:proxy:pair', async (_evt, companyKey: string) => {
@@ -684,6 +701,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     if (selected.length === 0) return { ok: false, error: 'Aucune ligne à extraire.' };
     const res = await engine.start(companyKey, selected);
     if ('error' in res) return { ok: false, error: res.error };
+    if ('busy' in res) return { ok: false, busy: res.busy };
     return { ok: true, runId: res.runId };
   });
 

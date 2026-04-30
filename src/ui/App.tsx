@@ -14,6 +14,7 @@ import { AmbiguousResolver } from './screens/AmbiguousResolver';
 import { Placeholder } from './screens/Placeholder';
 import { VendorClusterModal } from './VendorClusterModal';
 import { ShortcutOverlay } from './ShortcutOverlay';
+import { BusyLockModal } from './BusyLockModal';
 import { useStore } from '../store/store';
 
 export function App() {
@@ -67,6 +68,7 @@ export function App() {
         {content}
       </main>
       <VendorClusterModal />
+      <BusyLockModal />
       <ShortcutOverlay />
     </div>
   );
