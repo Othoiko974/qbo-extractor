@@ -38,6 +38,36 @@ export function bookingEntityMatchesCompany(
   return aliases.some((a) => normalizeEntity(a) === norm);
 }
 
+// True when the row "belongs to" the active company's QBO realm under the
+// refacturation routing rule: a direct match wins, but rows whose
+// bookingEntity doesn't match any *other* connected sister company also
+// belong to active by fallback. This catches the case where the
+// Fournisseur column says "VSL" or "Hydro-Québec" or any external
+// supplier — those bills live in the active project's QBO, not in a
+// sister's, so the Dashboard should keep showing them with their real
+// bookingEntity (e.g. "VSL") in the Entity column.
+export function rowBelongsToActiveCompany(
+  bookingEntity: string | null | undefined,
+  activeCompany: { label: string; entityAliases?: string[] },
+  allCompanies: Array<{
+    label: string;
+    entityAliases?: string[];
+    connected?: boolean;
+  }>,
+): boolean {
+  if (!bookingEntity) return true;
+  if (bookingEntityMatchesCompany(bookingEntity, activeCompany)) return true;
+  // Belongs elsewhere only if some OTHER connected sister claims it.
+  // Unconnected sisters (e.g. VSL with no QBO link yet) don't count —
+  // their rows fall back to the active company by definition.
+  for (const c of allCompanies) {
+    if (normalizeEntity(c.label) === normalizeEntity(activeCompany.label)) continue;
+    if (c.connected === false) continue;
+    if (bookingEntityMatchesCompany(bookingEntity, c)) return false;
+  }
+  return true;
+}
+
 // Distinct booking entities surfaced from a list of rows, useful for the
 // "Hors entreprise" KPI tooltip and the Settings auto-suggest.
 export function distinctEntities(

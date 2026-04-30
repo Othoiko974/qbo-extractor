@@ -3,7 +3,7 @@ import { useStore } from '../../store/store';
 import { Icon, fmtCurrency } from '../Icon';
 import type { BudgetRow } from '../../types/domain';
 import { t, useLang } from '../../i18n';
-import { bookingEntityMatchesCompany } from '../../shared/entity';
+import { rowBelongsToActiveCompany } from '../../shared/entity';
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
 import { Tooltip } from '../Tooltip';
 
@@ -55,24 +55,31 @@ export function Dashboard() {
     return budget.filter((r) => r.sheet === sheet);
   }, [budget, sheet]);
 
-  // Booking-entity scoping: by default we only surface rows whose Excel
-  // "Fournisseur" cell points to the active company. Foreign rows live in
-  // a different QBO instance and would always fail extraction here.
+  // Booking-entity scoping: a row belongs to the active company's QBO if
+  // either (a) its Fournisseur cell directly matches active's aliases, or
+  // (b) it doesn't match any *other connected* sister — the
+  // refacturation rule. Hydro / SATCOM / unconnected sisters like VSL
+  // therefore stay visible with their original entity name in the chip
+  // rather than being hidden as "hors entreprise".
   const entityFiltered = useMemo(() => {
     if (!company) return sheetFiltered;
     if (entityScope === 'all') return sheetFiltered;
-    return sheetFiltered.filter((r) => bookingEntityMatchesCompany(r.bookingEntity, company));
-  }, [sheetFiltered, entityScope, company]);
+    return sheetFiltered.filter((r) =>
+      rowBelongsToActiveCompany(r.bookingEntity, company, companies),
+    );
+  }, [sheetFiltered, entityScope, company, companies]);
 
-  // Total foreign-entity row count — drives the "Hors entreprise" KPI and
-  // the warning chip on the entity-scope toggle.
+  // Foreign-entity KPI — counts rows that legitimately live in a connected
+  // sister's QBO (those would fail extraction from this realm). Rows
+  // belonging to the active company by fallback aren't foreign.
   const foreignCount = useMemo(() => {
     if (!company) return 0;
     return sheetFiltered.reduce(
-      (n, r) => (bookingEntityMatchesCompany(r.bookingEntity, company) ? n : n + 1),
+      (n, r) =>
+        rowBelongsToActiveCompany(r.bookingEntity, company, companies) ? n : n + 1,
       0,
     );
-  }, [sheetFiltered, company]);
+  }, [sheetFiltered, company, companies]);
 
   const visible = useMemo(() => {
     if (filter === 'missing') return entityFiltered.filter((r) => !r.hasAttachment);
@@ -168,7 +175,7 @@ export function Dashboard() {
       .map((id) => budget.find((b) => b.id === id))
       .filter((r): r is BudgetRow => !!r);
     const matching = selectedRows.filter((r) =>
-      bookingEntityMatchesCompany(r.bookingEntity, company),
+      rowBelongsToActiveCompany(r.bookingEntity, company, companies),
     );
     const foreign = selectedRows.length - matching.length;
     if (foreign > 0) {
@@ -522,7 +529,7 @@ export function Dashboard() {
                     onToggle={() => toggleRow(it.row.id)}
                     foreign={
                       company
-                        ? !bookingEntityMatchesCompany(it.row.bookingEntity, company)
+                        ? !rowBelongsToActiveCompany(it.row.bookingEntity, company, companies)
                         : false
                     }
                   />
@@ -540,7 +547,7 @@ export function Dashboard() {
                     }
                     foreign={
                       company
-                        ? !bookingEntityMatchesCompany(it.members[0].bookingEntity, company)
+                        ? !rowBelongsToActiveCompany(it.members[0].bookingEntity, company, companies)
                         : false
                     }
                   />
