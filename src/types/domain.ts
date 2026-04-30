@@ -6,6 +6,10 @@ export type Company = {
   connected: boolean;
   qboEnv?: 'sandbox' | 'production';
   qboRealmId?: string;
+  // Project the company belongs to (v5+). Budget config is read from
+  // there; per-company budget fields below are kept on the type for
+  // back-compat with renderer callers but mirror the project's values.
+  projectId?: string | null;
   budgetSource?: 'gsheets' | 'excel';
   gsheetsWorkbookId?: string;
   gsheetsWorkbookName?: string;
@@ -16,6 +20,18 @@ export type Company = {
   // entity) column for this company. Default at creation = [label]. Used to
   // route rows to the right QBO instance and to filter the dashboard.
   entityAliases?: string[];
+};
+
+export type Project = {
+  id: string;
+  name: string;
+  budgetSource: 'gsheets' | 'excel' | null;
+  gsheetsWorkbookId: string | null;
+  gsheetsWorkbookName: string | null;
+  excelPath: string | null;
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
 };
 
 export type BudgetRow = {

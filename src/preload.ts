@@ -34,6 +34,13 @@ const api = {
     ipcRenderer.invoke('qbo:setAppCreds', clientId, clientSecret),
   qboDeleteAppCreds: () => ipcRenderer.invoke('qbo:deleteAppCreds'),
 
+  // QBO Server Proxy (centralized token mode)
+  qboProxyGetConfig: () => ipcRenderer.invoke('qbo:proxy:getConfig'),
+  qboProxySetConfig: (config: { enabled: boolean; url: string; apiKey?: string }) =>
+    ipcRenderer.invoke('qbo:proxy:setConfig', config),
+  qboProxyClearKey: () => ipcRenderer.invoke('qbo:proxy:clearKey'),
+  qboProxyTest: () => ipcRenderer.invoke('qbo:proxy:test'),
+
   // Google OAuth + Sheets
   googleConnect: (companyKey: string) => ipcRenderer.invoke('google:connect', companyKey),
   googleDisconnect: (companyKey: string) => ipcRenderer.invoke('google:disconnect', companyKey),
@@ -241,9 +248,26 @@ const api = {
     ipcRenderer.invoke('fs:listExtractedFiles', companyKey),
   pickFolder: () => ipcRenderer.invoke('fs:pickFolder'),
 
+  // Projects (v5+) — top-level grouping that owns budget config
+  projectsList: () => ipcRenderer.invoke('projects:list'),
+  projectsCreate: (name: string) =>
+    ipcRenderer.invoke('projects:create', { name }),
+  projectsRename: (projectId: string, name: string) =>
+    ipcRenderer.invoke('projects:rename', { projectId, name }),
+  projectsDelete: (projectId: string) =>
+    ipcRenderer.invoke('projects:delete', projectId),
+  companiesSetProject: (companyKey: string, projectId: string) =>
+    ipcRenderer.invoke('companies:setProject', { companyKey, projectId }),
+
   // Logs
   logsOpen: () => ipcRenderer.invoke('logs:open'),
   logsTail: (lines?: number) => ipcRenderer.invoke('logs:tail', lines),
+
+  // Static — host platform exposed to the renderer so UI strings can
+  // adapt: "Finder" on darwin, "Explorateur" on win32, generic
+  // "gestionnaire de fichiers" elsewhere. Also drives Cmd vs Ctrl
+  // key labels and other native-conventions copy.
+  platform: process.platform,
 };
 
 export type QboExtractorApi = typeof api;

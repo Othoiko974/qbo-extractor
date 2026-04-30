@@ -2,7 +2,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
 import type { BudgetRow } from '../types/domain';
-import { Companies, Settings, Runs, RunRows, RunRowCandidates, BudgetCache, VendorAliases, type NewCompany } from './db/repo';
+import {
+  Companies,
+  Projects,
+  Settings,
+  Runs,
+  RunRows,
+  RunRowCandidates,
+  BudgetCache,
+  VendorAliases,
+  type NewCompany,
+  type ProjectRow,
+} from './db/repo';
 import { Secrets, type QboToken } from './secrets';
 import { connectQbo, disconnectQbo } from './oauth-qbo';
 import { connectGoogle, getGoogleClient } from './oauth-google';
@@ -29,7 +40,9 @@ import type { sheets_v4 } from 'googleapis';
 import { readExcelBudget } from './budget/excel';
 import { normalizeVendors } from './budget/normalize';
 import { ExtractionEngine } from './extraction/engine';
-import { onQboRequest, QboClient } from './qbo/client';
+import { onQboRequest } from './qbo/client';
+import { createQboClient } from './qbo/factory';
+import { isProxyMode, pingProxyHealth } from './qbo/proxy-client';
 import {
   exportQboConnection,
   importQboConnection,
@@ -105,17 +118,25 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     if (!company || !company.qbo_realm_id) {
       return { ok: false, error: 'QBO non connecté pour cette entreprise.' };
     }
-    const token = await Secrets.getQbo(companyKey);
-    if (!token) return { ok: false, error: 'Token QBO manquant.' };
-    const expiresInMs = token.expires_at - Date.now();
-    const { QboClient } = await import('./qbo/client');
-    const client = new QboClient(companyKey, company.qbo_realm_id, company.qbo_env);
+    let tokenExpiresInSec: number | undefined;
+    if (isProxyMode()) {
+      const health = await pingProxyHealth();
+      if (!health.ok) return { ok: false, error: health.error };
+      if (!health.connected) return { ok: false, error: 'Proxy joignable mais aucun realm connecté.' };
+      // refresh_expires_in_days → seconds for backward-compat with the UI.
+      tokenExpiresInSec = (health.refresh_expires_in_days ?? 0) * 86_400;
+    } else {
+      const token = await Secrets.getQbo(companyKey);
+      if (!token) return { ok: false, error: 'Token QBO manquant.' };
+      tokenExpiresInSec = Math.round((token.expires_at - Date.now()) / 1000);
+    }
+    const client = createQboClient(companyKey, company.qbo_realm_id, company.qbo_env);
     const res = await client.ping();
     return {
       ...res,
       realmId: company.qbo_realm_id,
       env: company.qbo_env,
-      tokenExpiresInSec: Math.round(expiresInMs / 1000),
+      tokenExpiresInSec,
     };
   });
 
@@ -145,6 +166,41 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
   ipcMain.handle('qbo:deleteAppCreds', async () => {
     await Secrets.deleteQboAppCreds();
     return { ok: true };
+  });
+
+  ipcMain.handle('qbo:proxy:getConfig', async () => {
+    const apiKey = await Secrets.getQboProxyApiKey();
+    return {
+      enabled: isProxyMode(),
+      url: Settings.get('qbo_proxy_url') ?? '',
+      hasApiKey: !!apiKey,
+      apiKeyPreview: apiKey ? apiKey.slice(0, 8) + '…' + apiKey.slice(-4) : null,
+    };
+  });
+
+  ipcMain.handle(
+    'qbo:proxy:setConfig',
+    async (_evt, config: { enabled: boolean; url: string; apiKey?: string }) => {
+      try {
+        Settings.set('qbo_proxy_enabled', config.enabled ? '1' : '0');
+        Settings.set('qbo_proxy_url', (config.url ?? '').trim());
+        if (typeof config.apiKey === 'string' && config.apiKey.trim().length > 0) {
+          await Secrets.setQboProxyApiKey(config.apiKey.trim());
+        }
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
+    },
+  );
+
+  ipcMain.handle('qbo:proxy:clearKey', async () => {
+    await Secrets.deleteQboProxyApiKey();
+    return { ok: true };
+  });
+
+  ipcMain.handle('qbo:proxy:test', async () => {
+    return pingProxyHealth();
   });
 
   ipcMain.handle('qbo:pickTokenFile', async () => {
@@ -246,6 +302,19 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
   ipcMain.handle(
     'google:pickWorkbook',
     async (_evt, companyKey: string, workbookId: string, workbookName: string) => {
+      const company = Companies.get(companyKey);
+      if (!company) return { ok: false, error: 'Entreprise introuvable.' };
+      const project = projectForCompany(company);
+      if (!project) return { ok: false, error: 'Aucun projet rattaché.' };
+      // Write to the project so every company in it sees the same
+      // workbook on next budget read. Mirror onto the company too,
+      // for back-compat with any legacy reader that still hits the
+      // company columns directly.
+      Projects.update(project.id, {
+        budget_source: 'gsheets',
+        gsheets_workbook_id: workbookId,
+        gsheets_workbook_name: workbookName,
+      });
       Companies.update(companyKey, {
         budget_source: 'gsheets',
         gsheets_workbook_id: workbookId,
@@ -488,6 +557,16 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
   });
 
   ipcMain.handle('excel:setFile', async (_evt, companyKey: string, filePath: string) => {
+    const company = Companies.get(companyKey);
+    if (!company) return { ok: false, error: 'Entreprise introuvable.' };
+    const project = projectForCompany(company);
+    if (!project) return { ok: false, error: 'Aucun projet rattaché.' };
+    // Excel path is technically per-machine (it points to a local
+    // file) so writing to the project means all companies see the
+    // same path. That's correct for a single-user project workflow
+    // but won't survive a portable export — the path stays out of
+    // .qboconnect bundles.
+    Projects.update(project.id, { budget_source: 'excel', excel_path: filePath });
     Companies.update(companyKey, { budget_source: 'excel', excel_path: filePath });
     return { ok: true };
   });
@@ -495,30 +574,46 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
   ipcMain.handle('budget:read', async (_evt, companyKey: string) => {
     const company = Companies.get(companyKey);
     if (!company) return { ok: false, error: 'Entreprise introuvable.' };
-    const cached = BudgetCache.get(companyKey);
+    const project = projectForCompany(company);
+    const cached = project ? BudgetCache.get(project.id) : null;
     return {
       ok: true,
       rows: (cached?.rows as BudgetRow[] | undefined) ?? [],
       lastSync: cached?.syncedAt ?? null,
-      source: company.budget_source,
+      // Source comes from the project now — every company in the same
+      // project shares it. The legacy company.budget_source is the
+      // back-compat fallback for v0.1.x DBs that haven't migrated.
+      source: project?.budget_source ?? company.budget_source,
     };
   });
 
   ipcMain.handle('budget:resync', async (_evt, companyKey: string) => {
     const company = Companies.get(companyKey);
     if (!company) return { ok: false, error: 'Entreprise introuvable.' };
+    const project = projectForCompany(company);
+    if (!project) {
+      return {
+        ok: false,
+        error:
+          'Aucun projet rattaché à cette compagnie — recrée la compagnie ou lance la migration v5.',
+      };
+    }
     try {
       let rows: BudgetRow[] = [];
-      if (company.budget_source === 'gsheets' && company.gsheets_workbook_id) {
-        rows = await readBudget(companyKey, company.gsheets_workbook_id);
-      } else if (company.budget_source === 'excel' && company.excel_path) {
-        rows = readExcelBudget(company.excel_path);
+      if (project.budget_source === 'gsheets' && project.gsheets_workbook_id) {
+        // Google OAuth tokens still live per-company (each user
+        // connects their own Google account). The fetcher takes the
+        // company key so it can pick the right token, even though the
+        // workbook id comes from the project.
+        rows = await readBudget(companyKey, project.gsheets_workbook_id);
+      } else if (project.budget_source === 'excel' && project.excel_path) {
+        rows = readExcelBudget(project.excel_path);
       } else {
-        return { ok: false, error: 'Aucune source de budget configurée.' };
+        return { ok: false, error: 'Aucune source de budget configurée pour ce projet.' };
       }
       const aliasMap = VendorAliases.mapByCompany(companyKey);
       const { rows: normalized, clusters, unknownVendors } = normalizeVendors(rows, aliasMap);
-      BudgetCache.set(companyKey, normalized);
+      BudgetCache.set(project.id, normalized);
       return { ok: true, rows: normalized, lastSync: Date.now(), clusters, unknownVendors };
     } catch (err) {
       return { ok: false, error: errMsg(err) };
@@ -623,7 +718,11 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
         fetchFromCompanyKey?: string;
       },
     ) => {
-      const cached = BudgetCache.get(args.companyKey);
+      const company = Companies.get(args.companyKey);
+      if (!company) return { ok: false, error: 'Entreprise introuvable.' };
+      const project = projectForCompany(company);
+      if (!project) return { ok: false, error: 'Aucun projet rattaché à cette compagnie.' };
+      const cached = BudgetCache.get(project.id);
       if (!cached) return { ok: false, error: 'Aucun budget en cache.' };
       const row = (cached.rows as BudgetRow[]).find((r) => r.id === args.rowId);
       if (!row) return { ok: false, error: 'Ligne du budget introuvable.' };
@@ -737,10 +836,12 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
       if (!company || !company.qbo_realm_id) {
         return { ok: false, error: 'Compagnie introuvable.' };
       }
-      const token = await Secrets.getQbo(company.key);
-      if (!token) return { ok: false, error: 'Token QBO manquant.' };
+      if (!isProxyMode()) {
+        const token = await Secrets.getQbo(company.key);
+        if (!token) return { ok: false, error: 'Token QBO manquant.' };
+      }
       try {
-        const client = new QboClient(company.key, company.qbo_realm_id, company.qbo_env);
+        const client = createQboClient(company.key, company.qbo_realm_id, company.qbo_env);
         const attachables = await client.getAttachables(args.txnId, args.txnType);
         if (attachables.length === 0) {
           return { ok: false, error: 'Aucune pièce jointe sur cette transaction.' };
@@ -817,10 +918,12 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
         attachableKinds: string[];
       }> = [];
       for (const sister of sisters) {
-        const token = await Secrets.getQbo(sister.key);
-        if (!token) continue;
+        if (!isProxyMode()) {
+          const token = await Secrets.getQbo(sister.key);
+          if (!token) continue;
+        }
         try {
-          const client = new QboClient(sister.key, sister.qbo_realm_id!, sister.qbo_env);
+          const client = createQboClient(sister.key, sister.qbo_realm_id!, sister.qbo_env);
           const hits = await client.searchByDocNumber(args.docNumber);
           const top = hits.slice(0, 8);
           const enriched = await Promise.all(
@@ -985,9 +1088,84 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     if (res.canceled || !res.filePaths[0]) return { ok: false };
     return { ok: true, path: res.filePaths[0] };
   });
+
+  // ---- Projects --------------------------------------------------------
+  // Each project owns the budget config (gsheets workbook / excel path)
+  // shared by every company that belongs to it. The renderer uses these
+  // for the sidebar's project switcher and for Settings' project-level
+  // CRUD; per-company budget reads still go through budget:read which
+  // resolves the active company's project transparently.
+
+  ipcMain.handle('projects:list', async () => {
+    return Projects.list().map((p) => ({
+      id: p.id,
+      name: p.name,
+      budgetSource: p.budget_source,
+      gsheetsWorkbookId: p.gsheets_workbook_id,
+      gsheetsWorkbookName: p.gsheets_workbook_name,
+      excelPath: p.excel_path,
+      sortOrder: p.sort_order,
+      createdAt: p.created_at,
+      updatedAt: p.updated_at,
+    }));
+  });
+
+  ipcMain.handle(
+    'projects:create',
+    async (_evt, args: { name: string }) => {
+      const trimmed = args.name?.trim();
+      if (!trimmed) return { ok: false, error: 'Nom de projet requis.' };
+      const project = Projects.add({ name: trimmed });
+      return { ok: true, projectId: project.id };
+    },
+  );
+
+  ipcMain.handle(
+    'projects:rename',
+    async (_evt, args: { projectId: string; name: string }) => {
+      const trimmed = args.name?.trim();
+      if (!trimmed) return { ok: false, error: 'Nom requis.' };
+      const updated = Projects.update(args.projectId, { name: trimmed });
+      return { ok: !!updated, error: updated ? undefined : 'Projet introuvable.' };
+    },
+  );
+
+  ipcMain.handle(
+    'projects:delete',
+    async (_evt, projectId: string) => {
+      // Safety: refuse to delete a project that still has companies
+      // pointing at it. The user has to move them off first.
+      const companies = Projects.companies(projectId);
+      if (companies.length > 0) {
+        return {
+          ok: false,
+          error: `Le projet a ${companies.length} compagnie(s) rattachée(s). Migre-les vers un autre projet d'abord.`,
+        };
+      }
+      Projects.delete(projectId);
+      return { ok: true };
+    },
+  );
+
+  ipcMain.handle(
+    'companies:setProject',
+    async (_evt, args: { companyKey: string; projectId: string }) => {
+      const company = Companies.get(args.companyKey);
+      if (!company) return { ok: false, error: 'Compagnie introuvable.' };
+      const project = Projects.get(args.projectId);
+      if (!project) return { ok: false, error: 'Projet introuvable.' };
+      Companies.update(args.companyKey, { project_id: args.projectId });
+      return { ok: true };
+    },
+  );
 }
 
 function toClientCompany(c: ReturnType<typeof Companies.get> & object) {
+  // Budget config is owned by the project from v5 onwards. The
+  // company-level columns are kept for legacy callers but the
+  // renderer should treat the project's values as authoritative —
+  // they're surfaced via the project repo / IPC.
+  const project = c.project_id ? Projects.get(c.project_id) : null;
   return {
     key: c.key,
     label: c.label,
@@ -996,11 +1174,12 @@ function toClientCompany(c: ReturnType<typeof Companies.get> & object) {
     connected: !!c.qbo_connected && !!c.qbo_realm_id,
     qboEnv: c.qbo_env,
     qboRealmId: c.qbo_realm_id ?? undefined,
-    budgetSource: c.budget_source,
-    gsheetsWorkbookId: c.gsheets_workbook_id,
-    gsheetsWorkbookName: c.gsheets_workbook_name,
+    projectId: c.project_id ?? null,
+    budgetSource: project?.budget_source ?? c.budget_source,
+    gsheetsWorkbookId: project?.gsheets_workbook_id ?? c.gsheets_workbook_id,
+    gsheetsWorkbookName: project?.gsheets_workbook_name ?? c.gsheets_workbook_name,
     gsheetsEmail: c.gsheets_account_email,
-    excelPath: c.excel_path,
+    excelPath: project?.excel_path ?? c.excel_path,
     gsheetsConnected: !!c.gsheets_connected,
     entityAliases: safeJsonArray(c.entity_aliases),
   };
@@ -1008,6 +1187,19 @@ function toClientCompany(c: ReturnType<typeof Companies.get> & object) {
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+// Resolve the project a company belongs to. Falls back to the first
+// project in the DB when a company hasn't been linked yet (defensive —
+// shouldn't happen post-migration v5 but keeps things working if a
+// fresh-install company gets created before any project does).
+function projectForCompany(company: { project_id: string | null }): ProjectRow | null {
+  if (company.project_id) {
+    const p = Projects.get(company.project_id);
+    if (p) return p;
+  }
+  const fallback = Projects.list()[0];
+  return fallback ?? null;
 }
 
 // Detect QuickBooks Online's outgoing-invoice template. When the user
