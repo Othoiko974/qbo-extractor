@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type {
   Company,
+  Project,
   BudgetRow,
   ExtractionRow,
   ExtractionStatus,
@@ -35,6 +36,11 @@ export type ExtractionUpdate = {
 
 type Store = {
   companies: BackendCompany[];
+  // Project records loaded from main. Lives in the global store so the
+  // sidebar header, Settings → Projets section, and any other consumer
+  // stay in sync after rename / create / delete without each component
+  // having to wire its own re-fetch trigger.
+  projects: Project[];
   activeCompanyKey: string | null;
   screen: Screen;
   budget: BudgetRow[];
@@ -85,6 +91,7 @@ type Store = {
   confirmClusters: (entries: { rawName: string; canonicalName: string }[]) => Promise<void>;
 
   loadCompanies: () => Promise<void>;
+  loadProjects: () => Promise<void>;
   loadSettings: () => Promise<void>;
   loadBudget: (companyKey: string) => Promise<void>;
   resyncBudget: () => Promise<void>;
@@ -99,6 +106,7 @@ type Store = {
 
 export const useStore = create<Store>((set, get) => ({
   companies: [],
+  projects: [],
   activeCompanyKey: null,
   screen: 'dashboard',
   budget: [],
@@ -259,6 +267,11 @@ export const useStore = create<Store>((set, get) => ({
     if (list.length === 0) set({ screen: 'onboarding' });
   },
 
+  loadProjects: async () => {
+    const list = (await window.qboApi.projectsList()) as Project[];
+    set({ projects: list });
+  },
+
   loadSettings: async () => {
     const s = (await window.qboApi.getSettings()) as Record<string, string>;
     set({ settings: s });
@@ -372,6 +385,7 @@ export const useStore = create<Store>((set, get) => ({
 export function initStore() {
   const store = useStore.getState();
   void store.loadCompanies();
+  void store.loadProjects();
   void store.loadSettings();
   window.qboApi.onExtractionUpdate((u) => {
     useStore.getState().applyUpdate(u as ExtractionUpdate);

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useStore } from '../store/store';
 import type { Screen, Project } from '../types/domain';
 import { Icon } from './Icon';
@@ -16,7 +16,7 @@ const NAV: { key: Screen; tKey: string; icon: string }[] = [
 
 export function Sidebar() {
   useLang(); // re-render on language change
-  const { companies, activeCompanyKey, setActiveCompany, screen, setScreen, extraction } = useStore();
+  const { companies, projects, activeCompanyKey, setActiveCompany, screen, setScreen, extraction } = useStore();
 
   const addNewCompany = () => {
     setActiveCompany(null);
@@ -43,6 +43,7 @@ export function Sidebar() {
 
       <ProjectsAndCompanies
         companies={companies}
+        projects={projects}
         activeCompanyKey={activeCompanyKey}
         onPickCompany={setActiveCompany}
         onAddCompany={addNewCompany}
@@ -102,28 +103,18 @@ export function Sidebar() {
 // gets a collapsible group; the active company's project starts open.
 function ProjectsAndCompanies({
   companies,
+  projects,
   activeCompanyKey,
   onPickCompany,
   onAddCompany,
 }: {
   companies: ReturnType<typeof useStore.getState>['companies'];
+  projects: Project[];
   activeCompanyKey: string | null;
   onPickCompany: (key: string) => void;
   onAddCompany: () => void;
 }) {
-  const [projects, setProjects] = useState<Project[]>([]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const list = (await window.qboApi.projectsList()) as Project[];
-      if (!cancelled) setProjects(list);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [companies.length]);
 
   const activeCompany = companies.find((c) => c.key === activeCompanyKey);
   const activeProjectId = activeCompany?.projectId ?? null;

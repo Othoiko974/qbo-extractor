@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store/store';
 import { Icon } from '../Icon';
 import { t, useLang } from '../../i18n';
@@ -34,7 +34,7 @@ const FOLDER_PRESETS: { label: string; value: string }[] = [
 
 export function Settings() {
   useLang();
-  const { settings, updateSettings, setScreen, companies, loadCompanies, setActiveCompany } = useStore();
+  const { settings, updateSettings, setScreen, companies, projects, loadCompanies, loadProjects, setActiveCompany } = useStore();
   const [baseFolder, setBaseFolder] = useState(settings.base_folder ?? '');
   const [template, setTemplate] = useState(
     settings.naming_template ?? 'Depense_{num}_{fournisseur}_{date}_{montant}',
@@ -276,7 +276,12 @@ export function Settings() {
 
         <ProjectsSection
           companies={companies}
-          onCompanyChanged={() => void loadCompanies()}
+          projects={projects}
+          reloadProjects={loadProjects}
+          onCompanyChanged={() => {
+            void loadCompanies();
+            void loadProjects();
+          }}
         />
 
         <div className="card-surface" style={{ padding: 18 }}>
@@ -569,22 +574,17 @@ function CompanyEditor({
 // just manages the project records themselves.
 function ProjectsSection({
   companies,
+  projects,
+  reloadProjects,
   onCompanyChanged,
 }: {
   companies: Company[];
+  projects: Project[];
+  reloadProjects: () => Promise<void>;
   onCompanyChanged: () => void;
 }) {
-  const [projects, setProjects] = useState<Project[]>([]);
   const [newName, setNewName] = useState('');
   const [error, setError] = useState<string | null>(null);
-
-  const reload = async () => {
-    const list = (await window.qboApi.projectsList()) as Project[];
-    setProjects(list);
-  };
-  useEffect(() => {
-    void reload();
-  }, []);
 
   const create = async () => {
     setError(null);
@@ -599,7 +599,7 @@ function ProjectsSection({
       return;
     }
     setNewName('');
-    await reload();
+    await reloadProjects();
   };
 
   const rename = async (projectId: string, name: string) => {
@@ -611,7 +611,7 @@ function ProjectsSection({
       error?: string;
     };
     if (!res.ok) setError(res.error ?? 'Échec.');
-    await reload();
+    await reloadProjects();
   };
 
   const remove = async (projectId: string) => {
@@ -624,14 +624,13 @@ function ProjectsSection({
       setError(res.error ?? 'Échec.');
       return;
     }
-    await reload();
+    await reloadProjects();
   };
 
   const setProject = async (companyKey: string, projectId: string) => {
     setError(null);
     await window.qboApi.companiesSetProject(companyKey, projectId);
     onCompanyChanged();
-    await reload();
   };
 
   return (
