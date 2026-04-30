@@ -274,6 +274,10 @@ const api = {
   logsOpen: () => ipcRenderer.invoke('logs:open'),
   logsTail: (lines?: number) => ipcRenderer.invoke('logs:tail', lines),
 
+  // App-level — used by the update banner to compare current install
+  // against the latest GitHub release tag.
+  appVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
+
   // Static — host platform exposed to the renderer so UI strings can
   // adapt: "Finder" on darwin, "Explorateur" on win32, generic
   // "gestionnaire de fichiers" elsewhere. Also drives Cmd vs Ctrl

@@ -1061,6 +1061,14 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     await shell.openExternal(url);
     return { ok: true };
   });
+  // Used by the in-app update-checker (renderer fetches the latest
+  // GitHub release tag and compares against this). Kept on the IPC
+  // surface rather than reading process.env in the renderer so the
+  // version stays the bundled package.json one — process.env in the
+  // renderer wouldn't reflect the production app's version anyway.
+  ipcMain.handle('app:version', async () => {
+    return app.getVersion();
+  });
   ipcMain.handle('fs:revealFile', async (_evt, filePath: string) => {
     shell.showItemInFolder(filePath);
     return { ok: true };

@@ -15,6 +15,7 @@ import { Placeholder } from './screens/Placeholder';
 import { VendorClusterModal } from './VendorClusterModal';
 import { ShortcutOverlay } from './ShortcutOverlay';
 import { BusyLockModal } from './BusyLockModal';
+import { UpdateBanner } from './UpdateBanner';
 import { useStore } from '../store/store';
 
 export function App() {
@@ -65,6 +66,7 @@ export function App() {
     <div className="app-shell">
       {!fullBleed && <Sidebar />}
       <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <UpdateBanner />
         {content}
       </main>
       <VendorClusterModal />

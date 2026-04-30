@@ -63,7 +63,7 @@ export function Settings() {
   };
 
   const insertAt = (
-    ref: React.RefObject<HTMLInputElement>,
+    ref: React.RefObject<HTMLInputElement | null>,
     value: string,
     setValue: (s: string) => void,
     token: string,
