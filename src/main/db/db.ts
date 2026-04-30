@@ -12,16 +12,39 @@ export function getDb(): Database.Database {
   if (!fs.existsSync(userData)) fs.mkdirSync(userData, { recursive: true });
   const dbPath = path.join(userData, 'qbo-extractor.db');
   db = new Database(dbPath);
-  db.exec(SCHEMA);
+
+  // Bootstrap PRAGMAs and the version table so migrate() can read it on
+  // both fresh installs and upgrades.
+  db.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
+  `);
+
+  // Migrate FIRST so existing DBs reach CURRENT_VERSION shape before the
+  // SCHEMA pass runs. SCHEMA contains CREATE INDEX clauses that reference
+  // columns added by recent migrations (e.g. companies.project_id from v5);
+  // running SCHEMA before the migration would error with "no such column".
   migrate(db);
+
+  // SCHEMA acts as the source of truth for fresh installs (creates every
+  // table/index from scratch) and as an idempotent safety net for upgrades
+  // (CREATE TABLE / CREATE INDEX IF NOT EXISTS are no-ops once the migration
+  // has brought the DB to the current shape).
+  db.exec(SCHEMA);
+
+  // Defaults — INSERT OR IGNORE makes this safe to call every boot.
+  seedDefaultSettings(db);
+
   return db;
 }
 
 function migrate(conn: Database.Database) {
   const row = conn.prepare('SELECT version FROM schema_version LIMIT 1').get() as { version: number } | undefined;
   if (!row) {
+    // Fresh install — SCHEMA (run after this) will create everything.
+    // Just stamp the version so future upgrades know where to start.
     conn.prepare('INSERT INTO schema_version (version) VALUES (?)').run(CURRENT_VERSION);
-    seedDefaultSettings(conn);
     return;
   }
   let current = row.version;
