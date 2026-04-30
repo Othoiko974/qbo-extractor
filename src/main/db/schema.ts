@@ -51,9 +51,17 @@ CREATE TABLE IF NOT EXISTS companies (
   -- v5: each company belongs to exactly one project. Migration
   -- backfills every existing row with the same default project id so
   -- the sidebar stays coherent for users upgrading from v0.1.x.
-  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL
+  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+  -- v6: marks the project's "owner" / fallback company. Auto-created
+  -- alongside every project (label = "Compte [project name]"); receives
+  -- the booking entries no other company in the project claims (Hydro-
+  -- Québec, SATCOM…). Starts disconnected so extraction is blocked
+  -- until the user OAuths it; once connected it behaves like any
+  -- regular sister.
+  is_project_owner INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_companies_project ON companies(project_id);
+CREATE INDEX IF NOT EXISTS idx_companies_owner ON companies(project_id, is_project_owner);
 
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
@@ -136,7 +144,7 @@ CREATE TABLE IF NOT EXISTS run_row_candidates (
 CREATE INDEX IF NOT EXISTS idx_candidates_row ON run_row_candidates(run_row_id);
 `;
 
-export const CURRENT_VERSION = 5;
+export const CURRENT_VERSION = 6;
 
 // Per-version migrations. Applied in order for any version < CURRENT_VERSION.
 // Each migration must be idempotent and self-contained (the "CREATE TABLE IF
@@ -245,6 +253,43 @@ export const MIGRATIONS: { to: number; sql: string }[] = [
         project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
         rows_json TEXT NOT NULL,
         synced_at INTEGER NOT NULL
+      );
+    `,
+  },
+  {
+    to: 6,
+    // v6: introduce the project-owner concept. Every project gets a
+    // companion "Compte [name]" company that acts as the fallback bucket
+    // for booking entries no other company in the project claims
+    // (Hydro-Québec, SATCOM…). Starts disconnected so extraction stays
+    // blocked until the user OAuths it. Backfills one for each existing
+    // project that doesn't already have an owner.
+    sql: `
+      ALTER TABLE companies ADD COLUMN is_project_owner INTEGER NOT NULL DEFAULT 0;
+      CREATE INDEX IF NOT EXISTS idx_companies_owner ON companies(project_id, is_project_owner);
+
+      INSERT INTO companies (
+        key, label, initials, color, qbo_env, qbo_connected, gsheets_connected,
+        sort_order, created_at, updated_at, entity_aliases, project_id, is_project_owner
+      )
+      SELECT
+        'compte-' || lower(hex(randomblob(6))),
+        'Compte ' || p.name,
+        'CT',
+        '#94a3b8',
+        'production',
+        0,
+        0,
+        9999,
+        strftime('%s', 'now') * 1000,
+        strftime('%s', 'now') * 1000,
+        '[]',
+        p.id,
+        1
+      FROM projects p
+      WHERE NOT EXISTS (
+        SELECT 1 FROM companies c
+        WHERE c.project_id = p.id AND c.is_project_owner = 1
       );
     `,
   },

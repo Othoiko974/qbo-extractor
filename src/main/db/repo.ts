@@ -23,6 +23,11 @@ export type CompanyRow = {
   updated_at: number;
   entity_aliases: string; // JSON array of strings
   project_id: string | null;
+  // v6: project owner / fallback bucket. Marks the auto-created
+  // "Compte [project name]" company. Renderer styles it differently
+  // (italic + folder avatar) and the booking-entity filter knows to
+  // claim rows that no other sister claims.
+  is_project_owner: 0 | 1;
 };
 
 export type ProjectRow = {
@@ -56,9 +61,14 @@ export const Companies = {
   get(key: string): CompanyRow | undefined {
     return getDb().prepare('SELECT * FROM companies WHERE key = ?').get(key) as CompanyRow | undefined;
   },
-  add(c: NewCompany & { project_id?: string | null }): CompanyRow {
+  add(
+    c: NewCompany & { project_id?: string | null; is_project_owner?: 0 | 1 },
+  ): CompanyRow {
     const now = Date.now();
-    const key = slugify(c.label) + '-' + randomUUID().slice(0, 6);
+    const key =
+      c.is_project_owner === 1
+        ? 'compte-' + randomUUID().slice(0, 8)
+        : slugify(c.label) + '-' + randomUUID().slice(0, 6);
     // New companies attach to the first project by default — there's
     // typically just one in the post-v5 model. Caller can override
     // via the project_id field on c.
@@ -68,10 +78,14 @@ export const Companies = {
         .prepare('SELECT id FROM projects ORDER BY sort_order, created_at LIMIT 1')
         .get() as { id?: string } | undefined)?.id ??
       null;
+    // Owners start with empty aliases — they're the catch-all and any
+    // alias would short-circuit the fallback rule by claiming a real
+    // booking entity. Regular companies default to [label].
+    const aliases = c.is_project_owner === 1 ? [] : [c.label];
     getDb()
       .prepare(
-        `INSERT INTO companies (key, label, initials, color, qbo_env, budget_source, sort_order, created_at, updated_at, entity_aliases, project_id)
-         VALUES (@key, @label, @initials, @color, @qbo_env, @budget_source, @sort_order, @created_at, @updated_at, @entity_aliases, @project_id)`,
+        `INSERT INTO companies (key, label, initials, color, qbo_env, budget_source, sort_order, created_at, updated_at, entity_aliases, project_id, is_project_owner)
+         VALUES (@key, @label, @initials, @color, @qbo_env, @budget_source, @sort_order, @created_at, @updated_at, @entity_aliases, @project_id, @is_project_owner)`,
       )
       .run({
         key,
@@ -80,12 +94,12 @@ export const Companies = {
         color: c.color,
         qbo_env: c.qbo_env ?? 'sandbox',
         budget_source: c.budget_source ?? null,
-        sort_order: now,
+        sort_order: c.is_project_owner === 1 ? 9999 : now,
         created_at: now,
         updated_at: now,
-        // Default: company owns rows whose Fournisseur cell matches its label.
-        entity_aliases: JSON.stringify([c.label]),
+        entity_aliases: JSON.stringify(aliases),
         project_id: projectId,
+        is_project_owner: c.is_project_owner ?? 0,
       });
     return Companies.get(key)!;
   },
@@ -111,7 +125,8 @@ export const Companies = {
           gsheets_account_email=@gsheets_account_email, excel_path=@excel_path,
           qbo_connected=@qbo_connected, gsheets_connected=@gsheets_connected,
           sort_order=@sort_order, updated_at=@updated_at,
-          project_id=@project_id
+          project_id=@project_id,
+          is_project_owner=@is_project_owner
          WHERE key=@key`,
       )
       .run(merged);
@@ -412,7 +427,27 @@ export const Projects = {
         created_at: now,
         updated_at: now,
       });
+    // Auto-create the project owner / fallback company alongside the
+    // project. The renderer relies on every project having exactly one
+    // owner — same invariant the v6 migration enforces for legacy data.
+    Companies.add({
+      label: `Compte ${p.name}`,
+      initials: 'CT',
+      color: '#94a3b8',
+      qbo_env: 'production',
+      project_id: id,
+      is_project_owner: 1,
+    });
     return Projects.get(id)!;
+  },
+  // Find the project's owner / fallback company. Returns undefined if
+  // the project has none yet (legacy DB pre-v6 with a failed backfill).
+  owner(projectId: string): CompanyRow | undefined {
+    return getDb()
+      .prepare(
+        'SELECT * FROM companies WHERE project_id = ? AND is_project_owner = 1 LIMIT 1',
+      )
+      .get(projectId) as CompanyRow | undefined;
   },
   update(id: string, patch: Partial<ProjectRow>): ProjectRow | undefined {
     const existing = Projects.get(id);

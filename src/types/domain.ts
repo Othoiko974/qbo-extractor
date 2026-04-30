@@ -10,6 +10,11 @@ export type Company = {
   // there; per-company budget fields below are kept on the type for
   // back-compat with renderer callers but mirror the project's values.
   projectId?: string | null;
+  // v6: marks the project's auto-created "Compte [name]" — the
+  // fallback bucket that catches booking entries no other sister
+  // claims. Renderer styles it differently and the booking-entity
+  // filter knows to invert the match logic for it.
+  isProjectOwner?: boolean;
   budgetSource?: 'gsheets' | 'excel';
   gsheetsWorkbookId?: string;
   gsheetsWorkbookName?: string;

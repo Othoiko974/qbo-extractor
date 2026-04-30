@@ -42,13 +42,6 @@ type Store = {
   // having to wire its own re-fetch trigger.
   projects: Project[];
   activeCompanyKey: string | null;
-  // View mode of the Dashboard: 'company' (default — work on a real
-  // sister) or 'compte' (the project's virtual external-supplier
-  // bucket). In 'compte' mode activeCompanyKey still points at a real
-  // company in the same project so budget / IPC plumbing keeps working,
-  // but the UI filters and disables extraction.
-  activeView: 'company' | 'compte';
-  activeComptePid: string | null;
   screen: Screen;
   budget: BudgetRow[];
   extraction: ExtractionRow[];
@@ -94,7 +87,6 @@ type Store = {
   ) => Promise<void>;
   searchInSisters: () => Promise<void>;
   setActiveCompany: (k: string | null) => void;
-  setActiveCompte: (projectId: string) => void;
   dismissClusters: () => void;
   confirmClusters: (entries: { rawName: string; canonicalName: string }[]) => Promise<void>;
 
@@ -116,8 +108,6 @@ export const useStore = create<Store>((set, get) => ({
   companies: [],
   projects: [],
   activeCompanyKey: null,
-  activeView: 'company',
-  activeComptePid: null,
   screen: 'dashboard',
   budget: [],
   extraction: [],
@@ -260,25 +250,9 @@ export const useStore = create<Store>((set, get) => ({
     await get().resyncBudget();
   },
   setActiveCompany: (activeCompanyKey) => {
-    set({ activeCompanyKey, activeView: 'company', activeComptePid: null });
+    set({ activeCompanyKey });
     if (activeCompanyKey) void get().loadBudget(activeCompanyKey);
     else set({ budget: [], extraction: [] });
-  },
-  setActiveCompte: (projectId: string) => {
-    // Compte view = virtual project bucket. We keep activeCompanyKey
-    // pointed at *some* company in the same project so the existing
-    // budget / settings plumbing (which is keyed by company) stays
-    // valid. If the current company is already in this project, leave
-    // it alone; otherwise pick the first one that is.
-    const state = get();
-    const inProject = state.companies.find((c) => c.projectId === projectId);
-    let key = state.activeCompanyKey;
-    const current = state.companies.find((c) => c.key === key);
-    if (!current || current.projectId !== projectId) {
-      key = inProject?.key ?? null;
-    }
-    set({ activeCompanyKey: key, activeView: 'compte', activeComptePid: projectId });
-    if (key) void get().loadBudget(key);
   },
 
   setError: (error) => set({ error }),
@@ -286,11 +260,20 @@ export const useStore = create<Store>((set, get) => ({
   loadCompanies: async () => {
     const list = (await window.qboApi.listCompanies()) as BackendCompany[];
     set({ companies: list });
+    // First-time launch: pick the first *real* company as active so the
+    // user doesn't land on the disconnected fallback bucket. We only
+    // fall through to an owner if no real sister exists yet — same
+    // result as the legacy behavior in that edge case.
     if (!get().activeCompanyKey && list.length > 0) {
-      set({ activeCompanyKey: list[0].key });
-      void get().loadBudget(list[0].key);
+      const firstReal = list.find((c) => !c.isProjectOwner) ?? list[0];
+      set({ activeCompanyKey: firstReal.key });
+      void get().loadBudget(firstReal.key);
     }
-    if (list.length === 0) set({ screen: 'onboarding' });
+    // Onboarding screen only triggers when there's *nothing* — owners
+    // alone count as nothing real.
+    if (list.length === 0 || list.every((c) => c.isProjectOwner)) {
+      set({ screen: 'onboarding' });
+    }
   },
 
   loadProjects: async () => {

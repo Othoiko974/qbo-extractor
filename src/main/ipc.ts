@@ -1151,15 +1151,21 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
   ipcMain.handle(
     'projects:delete',
     async (_evt, projectId: string) => {
-      // Safety: refuse to delete a project that still has companies
-      // pointing at it. The user has to move them off first.
+      // Safety: refuse to delete a project that still has REAL
+      // companies pointing at it (the auto-created owner / Compte
+      // doesn't count — it's a project artefact and gets cascaded out
+      // when the project goes away).
       const companies = Projects.companies(projectId);
-      if (companies.length > 0) {
+      const realCompanies = companies.filter((c) => c.is_project_owner !== 1);
+      if (realCompanies.length > 0) {
         return {
           ok: false,
-          error: `Le projet a ${companies.length} compagnie(s) rattachée(s). Migre-les vers un autre projet d'abord.`,
+          error: `Le projet a ${realCompanies.length} compagnie(s) rattachée(s). Migre-les vers un autre projet d'abord.`,
         };
       }
+      // Cascade-delete the owner so it doesn't dangle.
+      const owner = Projects.owner(projectId);
+      if (owner) Companies.delete(owner.key);
       Projects.delete(projectId);
       return { ok: true };
     },
@@ -1193,6 +1199,7 @@ function toClientCompany(c: ReturnType<typeof Companies.get> & object) {
     qboEnv: c.qbo_env,
     qboRealmId: c.qbo_realm_id ?? undefined,
     projectId: c.project_id ?? null,
+    isProjectOwner: c.is_project_owner === 1,
     budgetSource: project?.budget_source ?? c.budget_source,
     gsheetsWorkbookId: project?.gsheets_workbook_id ?? c.gsheets_workbook_id,
     gsheetsWorkbookName: project?.gsheets_workbook_name ?? c.gsheets_workbook_name,

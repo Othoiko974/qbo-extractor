@@ -456,6 +456,8 @@ function CompanyEditor({
     setDraft('');
   };
 
+  const isOwner = !!company.isProjectOwner;
+
   return (
     <div
       style={{
@@ -469,30 +471,40 @@ function CompanyEditor({
             width: 22,
             height: 22,
             borderRadius: 5,
-            background: company.color,
-            color: '#fff',
+            background: isOwner ? 'var(--paper-2)' : company.color,
+            color: isOwner ? 'var(--muted)' : '#fff',
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
             fontSize: 10,
             fontWeight: 700,
+            border: isOwner ? '1px dashed var(--line)' : 'none',
           }}
         >
-          {company.initials}
+          {isOwner ? <Icon name="folder" size={11} /> : company.initials}
         </span>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 500 }}>{company.label}</div>
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 500,
+              fontStyle: isOwner ? 'italic' : 'normal',
+              color: isOwner ? 'var(--muted)' : 'inherit',
+            }}
+          >
+            {company.label}
+          </div>
           <div className="muted" style={{ fontSize: 11 }}>
             QBO :{' '}
-            <span style={{ color: company.connected ? 'var(--ok)' : 'var(--muted)' }}>
+            <span style={{ color: company.connected ? 'var(--ok)' : 'var(--err)' }}>
               {company.connected ? t('settings.qbo_connected') : t('settings.qbo_disconnected')}
             </span>
+            {isOwner && !company.connected && ' · bucket projet (extraction désactivée)'}
           </div>
         </div>
-        {/* Project-move dropdown — only useful when there are at least
-            two projects (otherwise there's nowhere to move to). Lets the
-            user reassign without leaving the card. */}
-        {allProjects.length > 1 && (
+        {/* Project-move dropdown — hidden for owners (their project is
+            their reason to exist) and when there's only one project. */}
+        {!isOwner && allProjects.length > 1 && (
           <select
             className="input input-sm"
             value={company.projectId ?? ''}
@@ -536,6 +548,10 @@ function CompanyEditor({
         </button>
       </div>
 
+      {/* Owners are catch-all by design — adding aliases would short-
+          circuit their fallback role by claiming specific booking
+          entities — so the editor is hidden for them. */}
+      {!isOwner && (
       <div style={{ marginTop: 10, marginLeft: 32 }}>
         <div
           className="muted"
@@ -599,6 +615,7 @@ function CompanyEditor({
           </button>
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -644,7 +661,26 @@ function ProjectsSection({
       return;
     }
     setNewName('');
+    // Project create cascades into a new owner Company server-side, so
+    // refresh both lists or the new Compte won't appear in the
+    // hierarchy until the next reload.
     await reloadProjects();
+    await reloadCompanies();
+  };
+
+  const remove = async (projectId: string) => {
+    setError(null);
+    const res = (await window.qboApi.projectsDelete(projectId)) as {
+      ok: boolean;
+      error?: string;
+    };
+    if (!res.ok) {
+      setError(res.error ?? 'Échec.');
+      return;
+    }
+    // Cascade-deleted owner: refresh companies too.
+    await reloadProjects();
+    await reloadCompanies();
   };
 
   const rename = async (projectId: string, name: string) => {
@@ -659,19 +695,6 @@ function ProjectsSection({
     await reloadProjects();
   };
 
-  const remove = async (projectId: string) => {
-    setError(null);
-    const res = (await window.qboApi.projectsDelete(projectId)) as {
-      ok: boolean;
-      error?: string;
-    };
-    if (!res.ok) {
-      setError(res.error ?? 'Échec.');
-      return;
-    }
-    await reloadProjects();
-  };
-
   const setProject = async (companyKey: string, projectId: string) => {
     setError(null);
     await window.qboApi.companiesSetProject(companyKey, projectId);
@@ -679,7 +702,10 @@ function ProjectsSection({
     await reloadProjects();
   };
 
-  const orphans = companies.filter((c) => !c.projectId);
+  // Owners always have a project_id, so they're never in the orphans
+  // list. The filter is defensive — a corrupted DB row wouldn't sneak
+  // its way into the user-facing "Sans projet" block.
+  const orphans = companies.filter((c) => !c.projectId && !c.isProjectOwner);
 
   return (
     <div className="card-surface" style={{ padding: 18, marginBottom: 12 }}>
@@ -692,7 +718,12 @@ function ProjectsSection({
       </div>
 
       {projects.map((p) => {
-        const linked = companies.filter((c) => c.projectId === p.id);
+        // Sort the linked list so the project owner / Compte sits at
+        // the bottom — matches the sidebar's hierarchy and the
+        // chip-resolution order.
+        const linked = companies
+          .filter((c) => c.projectId === p.id)
+          .sort((a, b) => Number(!!a.isProjectOwner) - Number(!!b.isProjectOwner));
         return (
           <ProjectCard
             key={p.id}
@@ -844,7 +875,10 @@ function ProjectCard({
         </button>
       </div>
 
-      {/* Companies list — full CompanyEditor inline. */}
+      {/* Companies list — full CompanyEditor inline. The Compte (project
+          owner) is rendered with the same component but its branch
+          inside the editor hides the project-move dropdown / aliases
+          editor since neither makes sense for the fallback bucket. */}
       <div style={{ marginBottom: 8 }}>
         {linkedCompanies.length === 0 && (
           <div
@@ -860,6 +894,12 @@ function ProjectCard({
             company={c}
             allProjects={allProjects}
             onDelete={async () => {
+              if (c.isProjectOwner) {
+                window.alert(
+                  "Le Compte du projet ne peut pas être supprimé tant que le projet existe — il sert de bucket aux factures externes. Supprime le projet pour le retirer.",
+                );
+                return;
+              }
               if (!confirm(`Supprimer la compagnie ${c.label} ?`)) return;
               await window.qboApi.deleteCompany(c.key);
               onCompanyChanged();
@@ -874,53 +914,11 @@ function ProjectCard({
             onImportQbo={() => onExportImportQbo(c.key)}
           />
         ))}
-        <CompteRowReadonly projectName={project.name} />
       </div>
 
       <button className="btn btn-sm" onClick={onAddCompany}>
         <Icon name="plus" size={11} /> Ajouter une compagnie au projet
       </button>
-    </div>
-  );
-}
-
-function CompteRowReadonly({ projectName }: { projectName: string }) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        padding: '10px 0',
-        borderBottom: '1px solid var(--line)',
-      }}
-      title="Bucket virtuel : reçoit les factures dont le fournisseur ne correspond à aucune compagnie du projet. Pas d'extraction QBO possible."
-    >
-      <span
-        style={{
-          width: 22,
-          height: 22,
-          borderRadius: 5,
-          background: 'var(--paper-2)',
-          color: 'var(--muted)',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          border: '1px dashed var(--line)',
-        }}
-      >
-        <Icon name="folder" size={11} />
-      </span>
-      <div style={{ flex: 1 }}>
-        <div
-          style={{ fontSize: 13, fontStyle: 'italic', color: 'var(--muted)' }}
-        >
-          Compte {projectName}
-        </div>
-        <div className="muted" style={{ fontSize: 11 }}>
-          Bucket virtuel — fournisseurs externes
-        </div>
-      </div>
     </div>
   );
 }

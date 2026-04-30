@@ -3,11 +3,7 @@ import { useStore } from '../../store/store';
 import { Icon, fmtCurrency } from '../Icon';
 import type { BudgetRow } from '../../types/domain';
 import { t, useLang } from '../../i18n';
-import {
-  rowBelongsToActiveCompany,
-  rowBelongsToActiveCompte,
-  rowDestinationLabel,
-} from '../../shared/entity';
+import { rowBelongsToActiveCompany, rowDestinationLabel } from '../../shared/entity';
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
 import { Tooltip } from '../Tooltip';
 
@@ -20,10 +16,7 @@ export function Dashboard() {
   const {
     budget,
     companies,
-    projects,
     activeCompanyKey,
-    activeView,
-    activeComptePid,
     lastSync,
     loading,
     error,
@@ -43,19 +36,13 @@ export function Dashboard() {
   const [launchOffscreen, setLaunchOffscreen] = useState(false);
 
   const company = companies.find((c) => c.key === activeCompanyKey);
-  const isCompteView = activeView === 'compte';
-  // Active project resolved from view mode — Compte view binds directly
-  // to a project, normal view inherits via the active company.
-  const activeProject = projects.find(
-    (p) => p.id === (isCompteView ? activeComptePid : company?.projectId ?? null),
-  );
-  // Companies in the same project — used by Compte filter to detect
-  // "no real company claims this row". We accept orphan companies (no
-  // project) only when no project is anchored at all.
-  const projectCompanies = useMemo(
-    () => (activeProject ? companies.filter((c) => c.projectId === activeProject.id) : companies),
-    [companies, activeProject],
-  );
+  // Companies in the same project as active — needed by the
+  // owner-mode filter to detect "no real sister claims this row".
+  // Falls back to the full list for orphan companies (no project).
+  const projectCompanies = useMemo(() => {
+    if (!company?.projectId) return companies;
+    return companies.filter((c) => c.projectId === company.projectId);
+  }, [companies, company?.projectId]);
 
   const sheets = useMemo(() => {
     const seen = new Set<string>();
@@ -75,33 +62,28 @@ export function Dashboard() {
     return budget.filter((r) => r.sheet === sheet);
   }, [budget, sheet]);
 
-  // Booking-entity scoping: differs by view mode.
-  //   - Company view: "mine" = direct match on active company's aliases
-  //     (fallback rows now belong to the project's Compte, not to the
-  //     active sister).
-  //   - Compte view: "mine" = the row's bookingEntity matches no real
-  //     company in the project — i.e. exactly the rows whose chip says
-  //     "Compte [project]".
+  // "Mes entreprises" filter — semantics differ by company kind:
+  //   - regular sister: direct alias match.
+  //   - project owner (auto-created Compte): inverse — claims every
+  //     row that no real sister in the project claims.
   // The "all" toggle still shows everything so the user can audit the
-  // full project budget regardless of which entry in the sidebar is
-  // selected.
+  // full project budget regardless of which entry is selected.
   const rowIsMine = (bookingEntity: string | null | undefined): boolean => {
-    if (isCompteView) return rowBelongsToActiveCompte(bookingEntity, projectCompanies);
     if (!company) return true;
-    return rowBelongsToActiveCompany(bookingEntity, company);
+    return rowBelongsToActiveCompany(bookingEntity, company, projectCompanies);
   };
 
   const entityFiltered = useMemo(() => {
     if (entityScope === 'all') return sheetFiltered;
     return sheetFiltered.filter((r) => rowIsMine(r.bookingEntity));
-  }, [sheetFiltered, entityScope, isCompteView, company, projectCompanies]);
+  }, [sheetFiltered, entityScope, company, projectCompanies]);
 
   // "Hors entreprise" KPI — counts rows that don't belong to the
   // current view. Used to surface a tooltip / nudge toward the "all"
   // scope when the filter is hiding non-trivial volume.
   const foreignCount = useMemo(() => {
     return sheetFiltered.reduce((n, r) => (rowIsMine(r.bookingEntity) ? n : n + 1), 0);
-  }, [sheetFiltered, isCompteView, company, projectCompanies]);
+  }, [sheetFiltered, company, projectCompanies]);
 
   const visible = useMemo(() => {
     if (filter === 'missing') return entityFiltered.filter((r) => !r.hasAttachment);
@@ -188,15 +170,16 @@ export function Dashboard() {
 
   const launch = () => {
     if (selection.size === 0) return;
-    // Compte view = virtual project bucket, no QBO. Block extraction
-    // and nudge the user toward selecting a real sister in the sidebar.
-    if (isCompteView) {
+    if (!company) return;
+    // Project owner without a QBO connection — extraction would have
+    // nowhere to go. Nudge the user to OAuth it (or pick a real
+    // sister) instead of failing silently downstream.
+    if (company.isProjectOwner && !company.connected) {
       window.alert(
-        "Le Compte projet n'a pas de connexion QuickBooks — aucune extraction ne peut tourner depuis cette vue.\n\nSélectionne une vraie compagnie du projet dans la sidebar (Altitude / TDL / VSL…) pour lancer l'extraction.",
+        `${company.label} n'est pas encore connecté à QuickBooks. Configure la connexion QBO de ce compte pour activer l'extraction, ou sélectionne une vraie compagnie du projet dans la sidebar.`,
       );
       return;
     }
-    if (!company) return;
     // Partition the selection by entity. We refuse to send a row to QBO if
     // its booking entity doesn't match the active company — those would
     // 100% return "not found" and waste API budget.
@@ -205,7 +188,7 @@ export function Dashboard() {
       .map((id) => budget.find((b) => b.id === id))
       .filter((r): r is BudgetRow => !!r);
     const matching = selectedRows.filter((r) =>
-      rowBelongsToActiveCompany(r.bookingEntity, company),
+      rowBelongsToActiveCompany(r.bookingEntity, company, projectCompanies),
     );
     const foreign = selectedRows.length - matching.length;
     if (foreign > 0) {
@@ -560,7 +543,7 @@ export function Dashboard() {
                     foreign={!rowIsMine(it.row.bookingEntity)}
                     destinationLabel={
                       company
-                        ? rowDestinationLabel(it.row.bookingEntity, company, companies, projects)
+                        ? rowDestinationLabel(it.row.bookingEntity, company, companies)
                         : undefined
                     }
                   />
@@ -579,7 +562,7 @@ export function Dashboard() {
                     foreign={!rowIsMine(it.members[0].bookingEntity)}
                     destinationLabel={
                       company
-                        ? rowDestinationLabel(it.members[0].bookingEntity, company, companies, projects)
+                        ? rowDestinationLabel(it.members[0].bookingEntity, company, companies)
                         : undefined
                     }
                   />

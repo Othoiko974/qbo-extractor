@@ -39,44 +39,40 @@ export function bookingEntityMatchesCompany(
 }
 
 // True when the row "belongs to" the active company under the
-// "mes entreprises" filter — i.e. the booking entity directly matches
-// one of active's aliases. Rows whose entity doesn't match any
-// company (Hydro-Québec, SATCOM…) belong to the project's virtual
-// Compte, not to active, so they're excluded here. The launch flow
-// also relies on this: refusing to query a fallback row against a
-// specific company's QBO realm avoids guaranteed "not found" hits.
+// "mes entreprises" filter. Two cases:
+//   - active is a regular sister → direct alias match only. Rows
+//     whose entity doesn't match are someone else's (sister or
+//     project owner), excluded here. The launch flow also relies on
+//     this: refusing to query a fallback row against a specific
+//     sister's QBO realm avoids guaranteed "not found" hits.
+//   - active is the project owner (auto-created "Compte [name]") →
+//     inverted: claim every row that no real sister in the project
+//     claims. Empty / unknown booking entities also land here.
 export function rowBelongsToActiveCompany(
   bookingEntity: string | null | undefined,
-  activeCompany: { label: string; entityAliases?: string[] },
+  activeCompany: { label: string; isProjectOwner?: boolean; entityAliases?: string[] },
+  projectCompanies: Array<{ label: string; isProjectOwner?: boolean; entityAliases?: string[] }>,
 ): boolean {
-  if (!bookingEntity) return true; // unknown → don't penalize
-  return bookingEntityMatchesCompany(bookingEntity, activeCompany);
-}
-
-// True when the row belongs to the active project's virtual Compte —
-// i.e. its booking entity doesn't match any real company in the
-// project. Used for the Dashboard's "mes entreprises" filter when the
-// user has clicked Compte in the sidebar; rows here are exactly the
-// ones that show the "Compte [project]" chip.
-export function rowBelongsToActiveCompte(
-  bookingEntity: string | null | undefined,
-  projectCompanies: Array<{ label: string; entityAliases?: string[] }>,
-): boolean {
-  if (!bookingEntity) return true; // empty also routes to Compte chip
-  for (const c of projectCompanies) {
-    if (bookingEntityMatchesCompany(bookingEntity, c)) return false;
+  if (activeCompany.isProjectOwner) {
+    if (!bookingEntity) return true;
+    for (const c of projectCompanies) {
+      if (c.isProjectOwner) continue;
+      if (bookingEntityMatchesCompany(bookingEntity, c)) return false;
+    }
+    return true;
   }
-  return true;
+  if (!bookingEntity) return true;
+  return bookingEntityMatchesCompany(bookingEntity, activeCompany);
 }
 
 // Returns the label shown on the Dashboard's entity chip — i.e. which
 // entity *logically owns* this row. Direct match on any company wins
 // (Altitude / TDL keep their own labels; a row literally tagged "VSL"
 // shows "VSL"). Everything else (external suppliers like Hydro-Québec
-// / SATCOM that no company has aliased) falls back to a virtual
-// "Compte [project name]" label — the project-owner bucket. That
-// matches the user's mental model: external bills are charged to the
-// project, not to any specific connected sister.
+// / SATCOM that no company has aliased) falls back to the project's
+// owner company — the auto-created "Compte [name]" entity. Reading
+// the label from a real DB row (rather than computing it on the fly)
+// means the user can rename the Compte and the chip follows.
 //
 // Note: this is purely a *display* rule. The actual QBO query for
 // extraction still runs against the active company's realm — see the
@@ -86,24 +82,32 @@ export function rowDestinationLabel(
   activeCompany: { label: string; projectId?: string | null; entityAliases?: string[] },
   allCompanies: Array<{
     label: string;
+    projectId?: string | null;
+    isProjectOwner?: boolean;
     entityAliases?: string[];
   }>,
-  projects: Array<{ id: string; name: string }>,
 ): string {
-  // Direct match on any company (connected or not) wins — so a row
-  // tagged "VSL" displays "VSL" without going through the fallback.
+  // Direct match on any non-owner company wins. We skip owners here
+  // because their entityAliases are intentionally empty (they're the
+  // catch-all) — including them would make a row tagged literally
+  // "Compte XYZ" match before the fallback path runs, which is fine,
+  // but we want the explicit fallback rule to be the only way owners
+  // win so renames don't change which rows match.
   if (bookingEntity) {
     for (const c of allCompanies) {
+      if (c.isProjectOwner) continue;
       if (bookingEntityMatchesCompany(bookingEntity, c)) return c.label;
     }
   }
-  // Fallback: virtual "Compte [project name]" — the project-owner
-  // bucket for external suppliers and unmatched bookings.
+  // Fallback: the project's owner company. Look up by flag so the
+  // chip text follows the user's rename of "Compte VSL" → "Externes".
   if (activeCompany.projectId) {
-    const project = projects.find((p) => p.id === activeCompany.projectId);
-    if (project) return `Compte ${project.name}`;
+    const owner = allCompanies.find(
+      (c) => c.projectId === activeCompany.projectId && c.isProjectOwner,
+    );
+    if (owner) return owner.label;
   }
-  // Degenerate: company without project — keep active's label.
+  // Degenerate: company without project / project missing its owner.
   return activeCompany.label;
 }
 

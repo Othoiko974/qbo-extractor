@@ -20,10 +20,7 @@ export function Sidebar() {
     companies,
     projects,
     activeCompanyKey,
-    activeView,
-    activeComptePid,
     setActiveCompany,
-    setActiveCompte,
     screen,
     setScreen,
     extraction,
@@ -56,10 +53,7 @@ export function Sidebar() {
         companies={companies}
         projects={projects}
         activeCompanyKey={activeCompanyKey}
-        activeView={activeView}
-        activeComptePid={activeComptePid}
         onPickCompany={setActiveCompany}
-        onPickCompte={setActiveCompte}
         onAddCompany={addNewCompany}
       />
 
@@ -119,30 +113,23 @@ function ProjectsAndCompanies({
   companies,
   projects,
   activeCompanyKey,
-  activeView,
-  activeComptePid,
   onPickCompany,
-  onPickCompte,
   onAddCompany,
 }: {
   companies: ReturnType<typeof useStore.getState>['companies'];
   projects: Project[];
   activeCompanyKey: string | null;
-  activeView: 'company' | 'compte';
-  activeComptePid: string | null;
   onPickCompany: (key: string) => void;
-  onPickCompte: (projectId: string) => void;
   onAddCompany: () => void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   const activeCompany = companies.find((c) => c.key === activeCompanyKey);
-  // Active project drives "expanded" state. In Compte view we still
-  // anchor on the project being viewed, otherwise on the active
-  // company's project.
-  const activeProjectId =
-    activeView === 'compte' ? activeComptePid : activeCompany?.projectId ?? null;
-  const orphans = companies.filter((c) => !c.projectId);
+  const activeProjectId = activeCompany?.projectId ?? null;
+  // Owners are pinned at the bottom of each project group regardless
+  // of their sort_order, so the user reads "real sisters first, fallback
+  // last" — matches the chip rendering hierarchy.
+  const orphans = companies.filter((c) => !c.projectId && !c.isProjectOwner);
 
   const toggle = (id: string) => {
     setCollapsed((prev) => {
@@ -156,7 +143,13 @@ function ProjectsAndCompanies({
   return (
     <div style={{ padding: '10px 10px 4px' }}>
       {projects.map((p) => {
-        const linked = companies.filter((c) => c.projectId === p.id);
+        // Sort: real sisters first, owner last. The owner stays in the
+        // same list as everything else (clickable, switchable like any
+        // other company) — what changes is its visual treatment, not
+        // its mechanics.
+        const linked = companies
+          .filter((c) => c.projectId === p.id)
+          .sort((a, b) => Number(!!a.isProjectOwner) - Number(!!b.isProjectOwner));
         const isActive = p.id === activeProjectId;
         const isCollapsed = collapsed.has(p.id) && !isActive;
         return (
@@ -198,15 +191,10 @@ function ProjectsAndCompanies({
                   <CompanyItem
                     key={c.key}
                     company={c}
-                    active={activeView === 'company' && activeCompanyKey === c.key}
+                    active={activeCompanyKey === c.key}
                     onClick={() => onPickCompany(c.key)}
                   />
                 ))}
-                <CompteItem
-                  projectName={p.name}
-                  active={activeView === 'compte' && activeComptePid === p.id}
-                  onClick={() => onPickCompte(p.id)}
-                />
               </div>
             )}
           </div>
@@ -232,7 +220,7 @@ function ProjectsAndCompanies({
             <CompanyItem
               key={c.key}
               company={c}
-              active={activeView === 'company' && activeCompanyKey === c.key}
+              active={activeCompanyKey === c.key}
               onClick={() => onPickCompany(c.key)}
             />
           ))}
@@ -250,71 +238,13 @@ function ProjectsAndCompanies({
   );
 }
 
-// Virtual "Compte projet" entry that sits at the bottom of every project
-// group in the sidebar. Visually distinct from real companies — italic
-// label, neutral square instead of the company-color avatar — so the
-// user reads it as a project bucket rather than a switchable workspace.
-// Clicking it puts the Dashboard into Compte view (filter to fallback
-// rows; extraction guarded with a modal).
-function CompteItem({
-  projectName,
-  active,
-  onClick,
-}: {
-  projectName: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <div
-      onClick={onClick}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        padding: '6px 8px',
-        borderRadius: 6,
-        cursor: 'pointer',
-        background: active ? '#fff' : 'transparent',
-        border: active ? '1px solid var(--line)' : '1px solid transparent',
-        marginBottom: 2,
-        marginLeft: 4,
-      }}
-      title="Vue virtuelle : factures sans entreprise rattachée du projet. Pas d'extraction QBO possible."
-    >
-      <span
-        style={{
-          width: 22,
-          height: 22,
-          borderRadius: 5,
-          background: 'var(--paper-2)',
-          color: 'var(--muted)',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          border: '1px dashed var(--line)',
-        }}
-      >
-        <Icon name="folder" size={11} />
-      </span>
-      <span
-        style={{
-          flex: 1,
-          fontSize: 12.5,
-          fontStyle: 'italic',
-          fontWeight: active ? 600 : 500,
-          color: 'var(--muted)',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        Compte {projectName}
-      </span>
-    </div>
-  );
-}
-
+// Renders a clickable company entry in the sidebar. Project owners
+// (the auto-created "Compte [name]" companies) get a distinct visual
+// treatment — folder icon avatar, italic label, muted color — so the
+// user reads them as the project's fallback bucket. Mechanics are
+// otherwise identical: click sets active, connection dot reflects
+// QBO-connected status (red when not, green when so), extraction is
+// blocked the same way as for any disconnected company.
 function CompanyItem({
   company,
   active,
@@ -324,6 +254,7 @@ function CompanyItem({
   active: boolean;
   onClick: () => void;
 }) {
+  const isOwner = !!company.isProjectOwner;
   return (
     <div
       onClick={onClick}
@@ -339,29 +270,39 @@ function CompanyItem({
         marginBottom: 2,
         marginLeft: 4,
       }}
+      title={
+        isOwner
+          ? company.connected
+            ? `${company.label} — bucket projet, connecté`
+            : `${company.label} — bucket projet, non connecté (extraction désactivée)`
+          : undefined
+      }
     >
       <span
         style={{
           width: 22,
           height: 22,
           borderRadius: 5,
-          background: company.color,
-          color: '#fff',
+          background: isOwner ? 'var(--paper-2)' : company.color,
+          color: isOwner ? 'var(--muted)' : '#fff',
           display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',
           fontSize: 10,
           fontWeight: 700,
           fontFamily: 'var(--mono)',
+          border: isOwner ? '1px dashed var(--line)' : 'none',
         }}
       >
-        {company.initials}
+        {isOwner ? <Icon name="folder" size={11} /> : company.initials}
       </span>
       <span
         style={{
           flex: 1,
           fontSize: 12.5,
+          fontStyle: isOwner ? 'italic' : 'normal',
           fontWeight: active ? 600 : 500,
+          color: isOwner ? 'var(--muted)' : 'inherit',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
@@ -371,7 +312,7 @@ function CompanyItem({
       </span>
       <span
         className={`dot ${company.connected ? 'dot-ok' : 'dot-idle'}`}
-        title={company.connected ? 'Connecté' : 'Déconnecté'}
+        title={company.connected ? 'Connecté' : 'Non connecté'}
       />
     </div>
   );
