@@ -44,12 +44,20 @@ jobs:
           # Vite renderer build hits the default ~2GB Node heap on CI runners.
           # 6GB fits well under the 14GB (mac) / 16GB (win) runner limits.
           NODE_OPTIONS: --max-old-space-size=6144
+          # QBO OAuth developer credentials baked into the bundle by
+          # vite.main.config.ts so end users don't have to paste them
+          # into Settings before they can OAuth-connect their company.
+          # Set via `gh secret set QBO_CLIENT_ID` / `QBO_CLIENT_SECRET`.
+          QBO_CLIENT_ID: ${{ secrets.QBO_CLIENT_ID }}
+          QBO_CLIENT_SECRET: ${{ secrets.QBO_CLIENT_SECRET }}
 
       - name: Make (Windows)
         if: matrix.os == 'windows-latest'
         run: npm run make
         env:
           NODE_OPTIONS: --max-old-space-size=6144
+          QBO_CLIENT_ID: ${{ secrets.QBO_CLIENT_ID }}
+          QBO_CLIENT_SECRET: ${{ secrets.QBO_CLIENT_SECRET }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
