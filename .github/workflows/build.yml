@@ -15,6 +15,12 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    permissions:
+      # Need write access to attach DMG / EXE directly to the GitHub
+      # Release on tag pushes — bypasses the actions/artifacts quota
+      # which fills up fast on a private free plan and has a 6-12h
+      # recalculation lag once it hits the cap.
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -59,7 +65,13 @@ jobs:
           QBO_CLIENT_ID: ${{ secrets.QBO_CLIENT_ID }}
           QBO_CLIENT_SECRET: ${{ secrets.QBO_CLIENT_SECRET }}
 
-      - name: Upload artifacts
+      - name: Upload artifacts (transient)
+        # Non-tag dev iterations: try to upload to the actions/artifacts
+        # bucket so the dev can fetch via gh run download. Tolerated when
+        # the bucket is full so the run doesn't fail mid-upload —
+        # tagged builds use the Release attachment path below instead.
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: qbo-extractor-${{ matrix.os }}
@@ -69,23 +81,24 @@ jobs:
           # 3 days keeps the last 1-2 dev iterations queryable but bounds
           # storage well under the free-plan quota. Tag a release
           # (refs/tags/v*) for anything that should outlive that window —
-          # those are stored separately on the GitHub Release, not as
-          # transient artifacts.
+          # Release attachments live on a separate budget.
           retention-days: 3
 
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Create GitHub release
+      - name: Attach to GitHub Release (on tag)
+        # Tag pushes upload directly to the Release object, sidestepping
+        # the actions/artifacts quota entirely. Each matrix job appends
+        # its own files so the same release ends up with both the Mac
+        # DMG and the Windows Setup.exe.
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: |
+            out/make/**/*.dmg
+            out/make/**/*.exe
+            out/make/**/*.zip
+            out/make/**/*.nupkg
+            out/make/**/RELEASES
+          fail_on_unmatched_files: false
           generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
