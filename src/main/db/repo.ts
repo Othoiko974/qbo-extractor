@@ -8,6 +8,9 @@ export type CompanyRow = {
   color: string;
   qbo_realm_id: string | null;
   qbo_env: 'sandbox' | 'production';
+  // Budget fields below are deprecated in v5 — projects own them now —
+  // but the columns are kept nullable on the company table for back-
+  // compat with v0.1.x installs that haven't run the v5 migration yet.
   budget_source: 'gsheets' | 'excel' | null;
   gsheets_workbook_id: string | null;
   gsheets_workbook_name: string | null;
@@ -19,6 +22,24 @@ export type CompanyRow = {
   created_at: number;
   updated_at: number;
   entity_aliases: string; // JSON array of strings
+  project_id: string | null;
+};
+
+export type ProjectRow = {
+  id: string;
+  name: string;
+  budget_source: 'gsheets' | 'excel' | null;
+  gsheets_workbook_id: string | null;
+  gsheets_workbook_name: string | null;
+  excel_path: string | null;
+  sort_order: number;
+  created_at: number;
+  updated_at: number;
+};
+
+export type NewProject = {
+  name: string;
+  budget_source?: 'gsheets' | 'excel' | null;
 };
 
 export type NewCompany = Pick<CompanyRow, 'label' | 'initials' | 'color'> & {
@@ -35,13 +56,22 @@ export const Companies = {
   get(key: string): CompanyRow | undefined {
     return getDb().prepare('SELECT * FROM companies WHERE key = ?').get(key) as CompanyRow | undefined;
   },
-  add(c: NewCompany): CompanyRow {
+  add(c: NewCompany & { project_id?: string | null }): CompanyRow {
     const now = Date.now();
     const key = slugify(c.label) + '-' + randomUUID().slice(0, 6);
+    // New companies attach to the first project by default — there's
+    // typically just one in the post-v5 model. Caller can override
+    // via the project_id field on c.
+    const projectId =
+      c.project_id ??
+      (getDb()
+        .prepare('SELECT id FROM projects ORDER BY sort_order, created_at LIMIT 1')
+        .get() as { id?: string } | undefined)?.id ??
+      null;
     getDb()
       .prepare(
-        `INSERT INTO companies (key, label, initials, color, qbo_env, budget_source, sort_order, created_at, updated_at, entity_aliases)
-         VALUES (@key, @label, @initials, @color, @qbo_env, @budget_source, @sort_order, @created_at, @updated_at, @entity_aliases)`,
+        `INSERT INTO companies (key, label, initials, color, qbo_env, budget_source, sort_order, created_at, updated_at, entity_aliases, project_id)
+         VALUES (@key, @label, @initials, @color, @qbo_env, @budget_source, @sort_order, @created_at, @updated_at, @entity_aliases, @project_id)`,
       )
       .run({
         key,
@@ -55,6 +85,7 @@ export const Companies = {
         updated_at: now,
         // Default: company owns rows whose Fournisseur cell matches its label.
         entity_aliases: JSON.stringify([c.label]),
+        project_id: projectId,
       });
     return Companies.get(key)!;
   },
@@ -79,7 +110,8 @@ export const Companies = {
           gsheets_workbook_id=@gsheets_workbook_id, gsheets_workbook_name=@gsheets_workbook_name,
           gsheets_account_email=@gsheets_account_email, excel_path=@excel_path,
           qbo_connected=@qbo_connected, gsheets_connected=@gsheets_connected,
-          sort_order=@sort_order, updated_at=@updated_at
+          sort_order=@sort_order, updated_at=@updated_at,
+          project_id=@project_id
          WHERE key=@key`,
       )
       .run(merged);
@@ -329,21 +361,86 @@ export const VendorAliases = {
   },
 };
 
+// Project-keyed budget cache (v5+). Several companies on the same
+// project hit the same cached rows, so switching company in the
+// sidebar doesn't trigger a re-fetch from gsheets/excel.
 export const BudgetCache = {
-  get(companyKey: string): { rows: unknown[]; syncedAt: number } | null {
+  get(projectId: string): { rows: unknown[]; syncedAt: number } | null {
     const row = getDb()
-      .prepare('SELECT rows_json, synced_at FROM budget_cache WHERE company_key = ?')
-      .get(companyKey) as { rows_json: string; synced_at: number } | undefined;
+      .prepare('SELECT rows_json, synced_at FROM budget_cache WHERE project_id = ?')
+      .get(projectId) as { rows_json: string; synced_at: number } | undefined;
     if (!row) return null;
     return { rows: JSON.parse(row.rows_json), syncedAt: row.synced_at };
   },
-  set(companyKey: string, rows: unknown[]) {
+  set(projectId: string, rows: unknown[]) {
     getDb()
       .prepare(
-        `INSERT INTO budget_cache (company_key, rows_json, synced_at) VALUES (?, ?, ?)
-         ON CONFLICT(company_key) DO UPDATE SET rows_json=excluded.rows_json, synced_at=excluded.synced_at`,
+        `INSERT INTO budget_cache (project_id, rows_json, synced_at) VALUES (?, ?, ?)
+         ON CONFLICT(project_id) DO UPDATE SET rows_json=excluded.rows_json, synced_at=excluded.synced_at`,
       )
-      .run(companyKey, JSON.stringify(rows), Date.now());
+      .run(projectId, JSON.stringify(rows), Date.now());
+  },
+};
+
+// Projects = top-level grouping of companies that share a budget. A
+// project owns the gsheets workbook / excel path; the companies it
+// contains route extraction queries to their respective QBO realms.
+export const Projects = {
+  list(): ProjectRow[] {
+    return getDb()
+      .prepare('SELECT * FROM projects ORDER BY sort_order, created_at')
+      .all() as ProjectRow[];
+  },
+  get(id: string): ProjectRow | undefined {
+    return getDb()
+      .prepare('SELECT * FROM projects WHERE id = ?')
+      .get(id) as ProjectRow | undefined;
+  },
+  add(p: NewProject): ProjectRow {
+    const now = Date.now();
+    const id = randomUUID();
+    getDb()
+      .prepare(
+        `INSERT INTO projects (id, name, budget_source, sort_order, created_at, updated_at)
+         VALUES (@id, @name, @budget_source, @sort_order, @created_at, @updated_at)`,
+      )
+      .run({
+        id,
+        name: p.name,
+        budget_source: p.budget_source ?? null,
+        sort_order: now,
+        created_at: now,
+        updated_at: now,
+      });
+    return Projects.get(id)!;
+  },
+  update(id: string, patch: Partial<ProjectRow>): ProjectRow | undefined {
+    const existing = Projects.get(id);
+    if (!existing) return undefined;
+    const merged = { ...existing, ...patch, id, updated_at: Date.now() };
+    getDb()
+      .prepare(
+        `UPDATE projects SET
+          name=@name, budget_source=@budget_source,
+          gsheets_workbook_id=@gsheets_workbook_id,
+          gsheets_workbook_name=@gsheets_workbook_name,
+          excel_path=@excel_path,
+          sort_order=@sort_order, updated_at=@updated_at
+         WHERE id=@id`,
+      )
+      .run(merged);
+    return Projects.get(id);
+  },
+  delete(id: string): void {
+    getDb().prepare('DELETE FROM projects WHERE id = ?').run(id);
+  },
+  // Companies belonging to the project — convenience for the sidebar.
+  companies(projectId: string): CompanyRow[] {
+    return getDb()
+      .prepare(
+        'SELECT * FROM companies WHERE project_id = ? ORDER BY sort_order, created_at',
+      )
+      .all(projectId) as CompanyRow[];
   },
 };
 
