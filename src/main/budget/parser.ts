@@ -54,6 +54,39 @@ function findColumn(sample: Record<string, unknown>, candidates: string[]): stri
   return undefined;
 }
 
+// Cell values from googleapis come as JS numbers when the sheet cell is
+// numeric. JS Number.toString() switches to scientific notation for
+// values >= 1e21 (e.g. very long invoice numbers like "12345678901234567890")
+// — that produces "1.2345678901234568e+19" downstream and breaks both the
+// QBO docNumber search and the Dashboard chip display. Normalize once
+// here so the rest of the pipeline only ever sees plain digit strings.
+function numericCellToString(v: unknown): string {
+  if (v == null) return '';
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) return '';
+    // Integer-valued numbers — render as plain digits even when toString
+    // would have used exponent notation. toLocaleString with grouping
+    // disabled produces no scientific form across the entire JS range.
+    if (Number.isInteger(v)) {
+      return v.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 0 });
+    }
+    return v.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 20 });
+  }
+  const s = String(v).trim();
+  // Scientific-notation strings can also reach us if a formula or upstream
+  // formatting left one in the cell — expand those too.
+  if (/^[+-]?\d+(?:\.\d+)?[eE][+-]?\d+$/.test(s)) {
+    const n = Number(s);
+    if (Number.isFinite(n)) {
+      if (Number.isInteger(n)) {
+        return n.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 0 });
+      }
+      return n.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 20 });
+    }
+  }
+  return s;
+}
+
 function parseAmount(v: unknown): number | null {
   if (v == null || v === '') return null;
   if (typeof v === 'number') return v;
@@ -569,7 +602,7 @@ export function parseBudgetSheets(sheets: InputSheet[]): BudgetRow[] {
     let kept = 0;
     let splits = 0;
     for (const r of dataRows) {
-      const rawNum = r[col.num!]?.toString().trim() ?? '';
+      const rawNum = numericCellToString(r[col.num!]).trim();
       const bookingEntity = r[col.vendor!]?.toString().trim() ?? '';
       const amount = parseAmount(r[col.amount!]);
       if (!rawNum || !bookingEntity || amount == null) continue;

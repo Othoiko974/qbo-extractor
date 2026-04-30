@@ -69,15 +69,13 @@ export function rowBelongsToActiveCompany(
 }
 
 // Returns the label shown on the Dashboard's entity chip — i.e. which
-// entity *logically owns* this row. Direct match wins (Altitude / TDL
-// keep their own labels; rows literally tagged "VSL" show "VSL").
-// Everything else (external suppliers like Hydro-Québec / SATCOM that
-// no company has aliased) falls back to the project's owner entity —
-// by convention the unconnected company in the same project as active.
-// That matches the user's mental model: external bills are charged to
-// the project, and the project entity (VSL on the Altitude / TDL / VSL
-// project) is the logical destination regardless of which connected
-// sister happens to be active.
+// entity *logically owns* this row. Direct match on any company wins
+// (Altitude / TDL keep their own labels; a row literally tagged "VSL"
+// shows "VSL"). Everything else (external suppliers like Hydro-Québec
+// / SATCOM that no company has aliased) falls back to a virtual
+// "Compte [project name]" label — the project-owner bucket. That
+// matches the user's mental model: external bills are charged to the
+// project, not to any specific connected sister.
 //
 // Note: this is purely a *display* rule. The actual QBO query for
 // extraction still runs against the active company's realm — see the
@@ -87,29 +85,24 @@ export function rowDestinationLabel(
   activeCompany: { label: string; projectId?: string | null; entityAliases?: string[] },
   allCompanies: Array<{
     label: string;
-    projectId?: string | null;
     entityAliases?: string[];
-    connected?: boolean;
   }>,
+  projects: Array<{ id: string; name: string }>,
 ): string {
-  // Direct match on any company (connected OR unconnected) wins — so a
-  // row literally tagged "VSL" displays "VSL" without going through the
-  // fallback path below.
+  // Direct match on any company (connected or not) wins — so a row
+  // tagged "VSL" displays "VSL" without going through the fallback.
   if (bookingEntity) {
     for (const c of allCompanies) {
       if (bookingEntityMatchesCompany(bookingEntity, c)) return c.label;
     }
   }
-  // Fallback: the unconnected company in the same project as active.
-  // Convention = project owner / external-supplier bucket.
+  // Fallback: virtual "Compte [project name]" — the project-owner
+  // bucket for external suppliers and unmatched bookings.
   if (activeCompany.projectId) {
-    const owner = allCompanies.find(
-      (c) => c.projectId === activeCompany.projectId && c.connected === false,
-    );
-    if (owner) return owner.label;
+    const project = projects.find((p) => p.id === activeCompany.projectId);
+    if (project) return `Compte ${project.name}`;
   }
-  // Degenerate case (project has no unconnected sister, or no project
-  // wired up yet) — keep active's label so the chip stays meaningful.
+  // Degenerate: company without project — keep active's label.
   return activeCompany.label;
 }
 

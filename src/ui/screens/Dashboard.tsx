@@ -16,6 +16,7 @@ export function Dashboard() {
   const {
     budget,
     companies,
+    projects,
     activeCompanyKey,
     lastSync,
     loading,
@@ -534,7 +535,7 @@ export function Dashboard() {
                     }
                     destinationLabel={
                       company
-                        ? rowDestinationLabel(it.row.bookingEntity, company, companies)
+                        ? rowDestinationLabel(it.row.bookingEntity, company, companies, projects)
                         : undefined
                     }
                   />
@@ -557,7 +558,7 @@ export function Dashboard() {
                     }
                     destinationLabel={
                       company
-                        ? rowDestinationLabel(it.members[0].bookingEntity, company, companies)
+                        ? rowDestinationLabel(it.members[0].bookingEntity, company, companies, projects)
                         : undefined
                     }
                   />
