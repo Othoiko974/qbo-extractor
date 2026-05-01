@@ -7,7 +7,20 @@ import { rowBelongsToActiveCompany, rowDestinationLabel } from '../../shared/ent
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
 import { Tooltip } from '../Tooltip';
 
-type Filter = 'missing' | 'has' | 'all';
+// Per-state chips on the Dashboard let the user pivot between the
+// six lifecycle states a budget row can be in. "todo" lumps together
+// rows that haven't been touched (no PJ, no extraction status); the
+// other narrow chips isolate one specific state at a time so the
+// user can answer questions like "which rows did we extract last
+// week?" or "which ambiguous rows still need a click?".
+type Filter =
+  | 'todo'        // no PJ in budget AND no successful extraction yet
+  | 'budget_pj'   // budget already says PJ=Oui
+  | 'extracted'   // pulled from QBO in a prior run (status='ok'), not in budget
+  | 'amb'         // multiple QBO candidates — awaiting user resolution
+  | 'nf'          // QBO returned nothing on the last run
+  | 'nopj'        // QBO txn found but no attachment on it
+  | 'all';
 type EntityScope = 'mine' | 'all';
 const ALL_SHEETS = '__ALL__';
 
@@ -24,7 +37,7 @@ export function Dashboard() {
     startExtraction,
     setScreen,
   } = useStore();
-  const [filter, setFilter] = useState<Filter>('missing');
+  const [filter, setFilter] = useState<Filter>('todo');
   const [entityScope, setEntityScope] = useState<EntityScope>('mine');
   const [sheet, setSheet] = useState<string>(ALL_SHEETS);
   const [selection, setSelection] = useState<Set<string>>(new Set());
@@ -85,20 +98,40 @@ export function Dashboard() {
     return sheetFiltered.reduce((n, r) => (rowIsMine(r.bookingEntity) ? n : n + 1), 0);
   }, [sheetFiltered, company, projectCompanies]);
 
-  // "Missing" / "has" semantics now combine the budget's own PJ flag
-  // with the persisted extraction history (run_rows in DB). A row is
-  // considered "done" when either the spreadsheet says PJ=Oui or a
-  // previous extraction ran ok / nopj on it. "Missing" is everything
-  // still actionable: no PJ AND not already extracted-OK.
-  const isAlreadyDone = (r: BudgetRow) =>
-    r.hasAttachment ||
-    r.extractionStatus === 'ok' ||
-    r.extractionStatus === 'nopj';
+  // Per-row classifier. "todo" is the catch-all for everything
+  // outside the named states — typical for rows the user hasn't
+  // touched yet. Order matters: hasAttachment from the budget wins
+  // over extraction history (the spreadsheet is authoritative for
+  // "the file is already filed").
+  const classify = (r: BudgetRow): Filter => {
+    if (r.hasAttachment) return 'budget_pj';
+    if (r.extractionStatus === 'ok') return 'extracted';
+    if (r.extractionStatus === 'amb') return 'amb';
+    if (r.extractionStatus === 'nf') return 'nf';
+    if (r.extractionStatus === 'nopj') return 'nopj';
+    return 'todo';
+  };
   const visible = useMemo(() => {
-    if (filter === 'missing') return entityFiltered.filter((r) => !isAlreadyDone(r));
-    if (filter === 'has') return entityFiltered.filter(isAlreadyDone);
-    return entityFiltered;
+    if (filter === 'all') return entityFiltered;
+    return entityFiltered.filter((r) => classify(r) === filter);
   }, [entityFiltered, filter]);
+
+  // Per-state counts so the chips can show their badges. Computed
+  // once over entityFiltered (the company-scoped set) — same source
+  // of truth as the visible list.
+  const counts = useMemo(() => {
+    const out: Record<Filter, number> = {
+      todo: 0,
+      budget_pj: 0,
+      extracted: 0,
+      amb: 0,
+      nf: 0,
+      nopj: 0,
+      all: entityFiltered.length,
+    };
+    for (const r of entityFiltered) out[classify(r)]++;
+    return out;
+  }, [entityFiltered]);
 
   // Group split-sibling rows under a collapsible header so a "Home Depot"
   // Excel cell listing 4 invoices shows as one summary line with a chevron
@@ -131,7 +164,10 @@ export function Dashboard() {
     return out;
   }, [visible]);
 
-  const missingCount = entityFiltered.filter((r) => !isAlreadyDone(r)).length;
+  // KPI "without PJ" tile — counts rows still requiring human / QBO
+  // action. Mirrors the "todo" chip but rendered separately as a top-
+  // line dashboard signal.
+  const missingCount = counts.todo + counts.amb + counts.nf;
 
   const toggleRow = (id: string) => {
     setSelection((prev) => {
@@ -254,13 +290,13 @@ export function Dashboard() {
     },
     {
       key: '1',
-      handler: () => setFilter('missing'),
+      handler: () => setFilter('todo'),
       label: t('shortcuts.dashboard.filter_missing'),
       group: t('shortcuts.group.filters'),
     },
     {
       key: '2',
-      handler: () => setFilter('has'),
+      handler: () => setFilter('extracted'),
       label: t('shortcuts.dashboard.filter_has'),
       group: t('shortcuts.group.filters'),
     },
@@ -456,19 +492,50 @@ export function Dashboard() {
             </select>
           </label>
 
-          <div style={{ display: 'flex', gap: 4, marginLeft: 8, alignSelf: 'flex-end' }}>
+          {/* Filter chips: one per lifecycle state. Counts are
+              rendered as a small grey badge after the label so the
+              user can see at a glance what's hiding behind a chip. */}
+          <div
+            style={{
+              display: 'flex',
+              gap: 4,
+              marginLeft: 8,
+              alignSelf: 'flex-end',
+              flexWrap: 'wrap',
+            }}
+          >
             <Chip
-              label={t('dashboard.filter.missing')}
-              active={filter === 'missing'}
-              onClick={() => setFilter('missing')}
+              label={`À extraire · ${counts.todo}`}
+              active={filter === 'todo'}
+              onClick={() => setFilter('todo')}
             />
             <Chip
-              label={t('dashboard.filter.has')}
-              active={filter === 'has'}
-              onClick={() => setFilter('has')}
+              label={`PJ budget · ${counts.budget_pj}`}
+              active={filter === 'budget_pj'}
+              onClick={() => setFilter('budget_pj')}
             />
             <Chip
-              label={t('dashboard.filter.all')}
+              label={`Extraites · ${counts.extracted}`}
+              active={filter === 'extracted'}
+              onClick={() => setFilter('extracted')}
+            />
+            <Chip
+              label={`Ambiguës · ${counts.amb}`}
+              active={filter === 'amb'}
+              onClick={() => setFilter('amb')}
+            />
+            <Chip
+              label={`Introuvables · ${counts.nf}`}
+              active={filter === 'nf'}
+              onClick={() => setFilter('nf')}
+            />
+            <Chip
+              label={`Sans PJ · ${counts.nopj}`}
+              active={filter === 'nopj'}
+              onClick={() => setFilter('nopj')}
+            />
+            <Chip
+              label={`Toutes · ${counts.all}`}
               active={filter === 'all'}
               onClick={() => setFilter('all')}
             />
