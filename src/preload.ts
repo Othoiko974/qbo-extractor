@@ -48,6 +48,9 @@ const api = {
   qboProxyTest: (companyKey: string) => ipcRenderer.invoke('qbo:proxy:test', companyKey),
   qboProxyPair: (companyKey: string) => ipcRenderer.invoke('qbo:proxy:pair', companyKey),
 
+  // Dev / diagnostics — opens (or closes) DevTools in detached mode.
+  openDevtools: () => ipcRenderer.invoke('dev:openDevtools'),
+
   // Google OAuth + Sheets
   googleConnect: (companyKey: string) => ipcRenderer.invoke('google:connect', companyKey),
   googleDisconnect: (companyKey: string) => ipcRenderer.invoke('google:disconnect', companyKey),

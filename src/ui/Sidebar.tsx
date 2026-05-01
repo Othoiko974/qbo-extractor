@@ -43,10 +43,30 @@ export function Sidebar() {
         style={{ padding: '10px 14px 10px 78px', display: 'flex', alignItems: 'center', gap: 10, minHeight: 52 }}
       >
         <div style={{ width: 28, height: 28, borderRadius: 7, background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 11 }}>QBO</div>
-        <div>
+        <div style={{ flex: 1 }}>
           <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.1 }}>QBO Extractor</div>
           <div style={{ fontSize: 10, color: 'var(--muted)' }}>Altitude 233</div>
         </div>
+        <button
+          className="no-drag"
+          onClick={() => {
+            void window.qboApi.openDevtools?.();
+          }}
+          title="Ouvrir DevTools (console + erreurs)"
+          style={{
+            background: 'transparent',
+            border: '1px solid var(--line)',
+            borderRadius: 6,
+            color: 'var(--muted)',
+            cursor: 'pointer',
+            fontSize: 10,
+            padding: '3px 8px',
+            fontFamily: 'var(--mono)',
+            letterSpacing: '0.04em',
+          }}
+        >
+          DEV
+        </button>
       </div>
 
       <ProjectsAndCompanies

@@ -64,6 +64,18 @@ import {
 export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
   const engine = new ExtractionEngine(() => getMainWindow()?.webContents ?? null);
 
+  // DevTools toggle wired to the sidebar's [DEV] button. Packaged Windows
+  // builds don't auto-open DevTools (only dev mode does), so this is the
+  // primary way for non-dev users to grab console errors and pipe them
+  // back to me.
+  ipcMain.handle('dev:openDevtools', async () => {
+    const wc = getMainWindow()?.webContents;
+    if (!wc) return { ok: false, error: 'No main window.' };
+    if (wc.isDevToolsOpened()) wc.closeDevTools();
+    else wc.openDevTools({ mode: 'detach' });
+    return { ok: true };
+  });
+
   // Forward every QBO HTTP request (v3 API only — signed-URL CDN downloads
   // don't count toward Intuit's rate limit, so they're filtered upstream)
   // to the renderer so the Extraction screen can show real req/min cadence.
