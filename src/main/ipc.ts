@@ -11,6 +11,7 @@ import {
   RunRowCandidates,
   BudgetCache,
   VendorAliases,
+  budgetSignature,
   type NewCompany,
   type ProjectRow,
 } from './db/repo';
@@ -615,9 +616,10 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     if (!company) return { ok: false, error: 'Entreprise introuvable.' };
     const project = projectForCompany(company);
     const cached = project ? BudgetCache.get(project.id) : null;
+    const rawRows = (cached?.rows as BudgetRow[] | undefined) ?? [];
     return {
       ok: true,
-      rows: (cached?.rows as BudgetRow[] | undefined) ?? [],
+      rows: project ? enrichWithExtractionHistory(rawRows, project.id) : rawRows,
       lastSync: cached?.syncedAt ?? null,
       // Source comes from the project now — every company in the same
       // project shares it. The legacy company.budget_source is the
@@ -653,7 +655,13 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
       const aliasMap = VendorAliases.mapByCompany(companyKey);
       const { rows: normalized, clusters, unknownVendors } = normalizeVendors(rows, aliasMap);
       BudgetCache.set(project.id, normalized);
-      return { ok: true, rows: normalized, lastSync: Date.now(), clusters, unknownVendors };
+      return {
+        ok: true,
+        rows: enrichWithExtractionHistory(normalized, project.id),
+        lastSync: Date.now(),
+        clusters,
+        unknownVendors,
+      };
     } catch (err) {
       return { ok: false, error: errMsg(err) };
     }
@@ -1338,6 +1346,33 @@ function semverGt(a: string, b: string): boolean {
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+// Stamp each BudgetRow with its persisted extraction state from prior
+// runs (any company in the project). Lets the Dashboard show a green
+// check on rows extracted last week and skip them by default in the
+// next launch — without re-querying QBO. Pure data merge, no IO.
+function enrichWithExtractionHistory(
+  rows: BudgetRow[],
+  projectId: string,
+): BudgetRow[] {
+  const latest = RunRows.latestForProject(projectId);
+  if (latest.size === 0) return rows;
+  return rows.map((r) => {
+    const sig = budgetSignature(r.sheet, r.docNumber, r.amount);
+    if (!sig) return r;
+    const hit = latest.get(sig);
+    if (!hit) return r;
+    return {
+      ...r,
+      extractionStatus: hit.status,
+      extractionFilePath: hit.file_path ?? undefined,
+      extractionTxnId: hit.qbo_txn_id ?? undefined,
+      extractionTxnType:
+        (hit.qbo_txn_type as 'Bill' | 'Purchase' | 'Invoice' | undefined) ?? undefined,
+      extractedAt: hit.updated_at ?? undefined,
+    };
+  });
 }
 
 // Resolve the project a company belongs to. Falls back to the first

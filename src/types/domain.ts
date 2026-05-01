@@ -65,6 +65,16 @@ export type BudgetRow = {
   splitGroupSize?: number;
   splitIndex?: number;
   hasAttachment: boolean;
+  // Persisted extraction state from prior runs (any company in the
+  // project), keyed by signature (sheet|docNumber|amount). Lets the
+  // Dashboard show a green check on rows already extracted last week,
+  // an orange dot on ambiguous-but-unresolved, etc. — and skip them
+  // by default when launching a new run. Absent = never attempted.
+  extractionStatus?: ExtractionStatus;
+  extractionFilePath?: string;
+  extractionTxnId?: string;
+  extractionTxnType?: 'Bill' | 'Purchase' | 'Invoice';
+  extractedAt?: number;
 };
 
 export type VendorAlias = {

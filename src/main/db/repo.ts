@@ -266,7 +266,55 @@ export const RunRows = {
       )
       .run(merged.status, merged.qbo_txn_id, merged.qbo_txn_type, merged.file_path, merged.error, merged.updated_at, id);
   },
+  // Returns the latest run_row state for every (sheet, doc_number, amount)
+  // signature touched by any company belonging to the project. Used by
+  // budget:read to enrich BudgetRows with their persisted extraction
+  // status across sessions — so a row marked 'ok' last week shows green
+  // in today's Dashboard and isn't re-extracted by default.
+  //
+  // Signature canonicalization mirrors the renderer: amount is rounded
+  // to cents (1234.567 → 123457) so float jitter doesn't create
+  // duplicate signatures.
+  latestForProject(projectId: string): Map<string, RunRowRow> {
+    const rows = getDb()
+      .prepare(
+        `SELECT rr.*
+         FROM run_rows rr
+         JOIN runs r ON r.id = rr.run_id
+         JOIN companies c ON c.key = r.company_key
+         WHERE c.project_id = ?
+           AND rr.doc_number IS NOT NULL
+           AND rr.amount IS NOT NULL
+           AND rr.sheet IS NOT NULL
+         ORDER BY rr.updated_at DESC, r.started_at DESC`,
+      )
+      .all(projectId) as RunRowRow[];
+    const out = new Map<string, RunRowRow>();
+    for (const row of rows) {
+      const sig = budgetSignature(row.sheet, row.doc_number, row.amount);
+      if (!sig) continue;
+      // Latest wins: rows are pre-sorted DESC so the first hit per
+      // signature is the most recent state.
+      if (!out.has(sig)) out.set(sig, row);
+    }
+    return out;
+  },
 };
+
+// Canonical per-budget-row signature shared between repo (where
+// run_rows are looked up) and IPC (where BudgetRows are enriched).
+// Returns null when any required component is missing — those rows
+// can't be reliably linked to extraction history anyway.
+export function budgetSignature(
+  sheet: string | null | undefined,
+  docNumber: string | null | undefined,
+  amount: number | null | undefined,
+): string | null {
+  if (!sheet || !docNumber || amount == null) return null;
+  // Round to cents to dodge IEEE-754 jitter on Excel-imported amounts
+  // that come through as e.g. 350.0999999999999 vs the canonical 350.10.
+  return `${sheet}|${docNumber}|${Math.round(amount * 100)}`;
+}
 
 export type RunRowCandidateRow = {
   id: number;

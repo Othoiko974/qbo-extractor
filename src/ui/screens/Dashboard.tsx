@@ -85,9 +85,18 @@ export function Dashboard() {
     return sheetFiltered.reduce((n, r) => (rowIsMine(r.bookingEntity) ? n : n + 1), 0);
   }, [sheetFiltered, company, projectCompanies]);
 
+  // "Missing" / "has" semantics now combine the budget's own PJ flag
+  // with the persisted extraction history (run_rows in DB). A row is
+  // considered "done" when either the spreadsheet says PJ=Oui or a
+  // previous extraction ran ok / nopj on it. "Missing" is everything
+  // still actionable: no PJ AND not already extracted-OK.
+  const isAlreadyDone = (r: BudgetRow) =>
+    r.hasAttachment ||
+    r.extractionStatus === 'ok' ||
+    r.extractionStatus === 'nopj';
   const visible = useMemo(() => {
-    if (filter === 'missing') return entityFiltered.filter((r) => !r.hasAttachment);
-    if (filter === 'has') return entityFiltered.filter((r) => r.hasAttachment);
+    if (filter === 'missing') return entityFiltered.filter((r) => !isAlreadyDone(r));
+    if (filter === 'has') return entityFiltered.filter(isAlreadyDone);
     return entityFiltered;
   }, [entityFiltered, filter]);
 
@@ -122,7 +131,7 @@ export function Dashboard() {
     return out;
   }, [visible]);
 
-  const missingCount = entityFiltered.filter((r) => !r.hasAttachment).length;
+  const missingCount = entityFiltered.filter((r) => !isAlreadyDone(r)).length;
 
   const toggleRow = (id: string) => {
     setSelection((prev) => {
@@ -187,10 +196,26 @@ export function Dashboard() {
     const selectedRows = ids
       .map((id) => budget.find((b) => b.id === id))
       .filter((r): r is BudgetRow => !!r);
-    const matching = selectedRows.filter((r) =>
+    // Drop rows already extracted in a prior run (status = 'ok'). Re-
+    // running them would just re-download the same file. The user can
+    // still re-extract by deleting the local file + re-launching, or by
+    // explicitly opting in via the confirm below.
+    const alreadyOkIds = new Set(
+      selectedRows.filter((r) => r.extractionStatus === 'ok').map((r) => r.id),
+    );
+    let effectiveRows = selectedRows;
+    if (alreadyOkIds.size > 0) {
+      const reextract = window.confirm(
+        `${alreadyOkIds.size} ligne(s) déjà extraite(s) avec succès lors d'un run précédent — re-télécharger ?\n\nOK = re-télécharger.\nAnnuler = ignorer ces lignes (extraire seulement les autres).`,
+      );
+      if (!reextract) {
+        effectiveRows = selectedRows.filter((r) => !alreadyOkIds.has(r.id));
+      }
+    }
+    const matching = effectiveRows.filter((r) =>
       rowBelongsToActiveCompany(r.bookingEntity, company, projectCompanies),
     );
-    const foreign = selectedRows.length - matching.length;
+    const foreign = effectiveRows.length - matching.length;
     if (foreign > 0) {
       const ok = window.confirm(
         t('dashboard.launch.confirm_mixed', {
@@ -729,7 +754,7 @@ function Row({
   const [commentExpanded, setCommentExpanded] = useState(false);
   return (
     <tr
-      className={`${!row.hasAttachment ? 'missing-pj' : ''}${selected ? ' selected' : ''}`}
+      className={`${rowNeedsAction(row) ? 'missing-pj' : ''}${selected ? ' selected' : ''}`}
       style={foreign ? { opacity: 0.55 } : undefined}
       title={foreign ? t('dashboard.entity_scope.row_foreign') : undefined}
     >
@@ -737,17 +762,7 @@ function Row({
         <input type="checkbox" checked={selected} onChange={onToggle} />
       </td>
       <td>
-        {row.hasAttachment ? (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--ok)' }}>
-            <span className="dot dot-ok" />
-            <span style={{ fontSize: 11.5 }}>OK</span>
-          </span>
-        ) : (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--warn)' }}>
-            <span className="dot dot-warn" />
-            <span style={{ fontSize: 11.5 }}>{t('status.missing')}</span>
-          </span>
-        )}
+        <PjStatusCell row={row} />
       </td>
       <td className="mono" style={{ color: 'var(--muted)', whiteSpace: 'nowrap', fontSize: 11.5 }}>
         {row.date}
@@ -880,7 +895,7 @@ function GroupRows({
   return (
     <>
       <tr
-        className={`${!head.hasAttachment ? 'missing-pj' : ''}${allSelected ? ' selected' : ''}`}
+        className={`${rowNeedsAction(head) ? 'missing-pj' : ''}${allSelected ? ' selected' : ''}`}
         style={foreign ? { opacity: 0.55 } : undefined}
         title={foreign ? t('dashboard.entity_scope.row_foreign') : undefined}
       >
@@ -895,17 +910,7 @@ function GroupRows({
           />
         </td>
         <td>
-          {head.hasAttachment ? (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--ok)' }}>
-              <span className="dot dot-ok" />
-              <span style={{ fontSize: 11.5 }}>OK</span>
-            </span>
-          ) : (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--warn)' }}>
-              <span className="dot dot-warn" />
-              <span style={{ fontSize: 11.5 }}>{t('status.missing')}</span>
-            </span>
-          )}
+          <PjStatusCell row={head} />
         </td>
         <td className="mono" style={{ color: 'var(--muted)', whiteSpace: 'nowrap', fontSize: 11.5 }}>
           {head.date}
@@ -1021,7 +1026,7 @@ function GroupRows({
         members.map((m) => (
           <tr
             key={m.id}
-            className={`${!m.hasAttachment ? 'missing-pj' : ''}${selection.has(m.id) ? ' selected' : ''}`}
+            className={`${rowNeedsAction(m) ? 'missing-pj' : ''}${selection.has(m.id) ? ' selected' : ''}`}
           >
             <td>
               <input
@@ -1114,4 +1119,93 @@ function relativeTime(ts: number | null | undefined): string {
   const d = Math.floor(h / 24);
   if (d < 7) return `il y a ${d} j`;
   return new Date(ts).toLocaleDateString('fr-CA');
+}
+
+// True when a row still requires the user's attention — drives the
+// "missing-pj" row tint. A row already flagged in the budget OR
+// successfully extracted via QBO is considered done; ambiguous, not-
+// found, and no-PJ rows still need work and stay tinted.
+function rowNeedsAction(row: BudgetRow): boolean {
+  if (row.hasAttachment) return false;
+  if (row.extractionStatus === 'ok') return false;
+  if (row.extractionStatus === 'nopj') return false; // QBO confirmed no PJ — closed loop
+  return true;
+}
+
+// PJ status cell — combines two signals into a single visual:
+//   1. The budget's own "PJ" column (hasAttachment) — true when the
+//      spreadsheet already says "Oui", meaning the user filed the PJ
+//      themselves and the extractor has nothing to do.
+//   2. The persisted extraction history (run_rows joined to runs +
+//      companies for this project). When the spreadsheet doesn't
+//      flag the row, but a previous run successfully fetched the PJ
+//      from QBO, we want to show that — otherwise the user re-runs
+//      the same row tomorrow.
+//
+// Priority: hasAttachment wins (the spreadsheet is the source of
+// truth for "this row has its file"). When that's false, the
+// extraction history surfaces.
+function PjStatusCell({ row }: { row: BudgetRow }) {
+  if (row.hasAttachment) {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--ok)' }}>
+        <span className="dot dot-ok" />
+        <span style={{ fontSize: 11.5 }}>OK</span>
+      </span>
+    );
+  }
+  const tooltipDate = row.extractedAt
+    ? new Date(row.extractedAt).toLocaleString('fr-CA')
+    : null;
+  switch (row.extractionStatus) {
+    case 'ok':
+      return (
+        <span
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--ok)' }}
+          title={
+            tooltipDate ? `Extraite via QBO le ${tooltipDate}` : 'Extraite via QBO'
+          }
+        >
+          <span className="dot dot-ok" />
+          <span style={{ fontSize: 11.5 }}>Extraite</span>
+        </span>
+      );
+    case 'amb':
+      return (
+        <span
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#a86620' }}
+          title="Plusieurs candidats QBO — à résoudre depuis l'écran Review"
+        >
+          <span className="dot" style={{ background: '#e0a155' }} />
+          <span style={{ fontSize: 11.5 }}>Ambigu</span>
+        </span>
+      );
+    case 'nf':
+      return (
+        <span
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--err)' }}
+          title="Aucun match QBO lors du dernier run"
+        >
+          <span className="dot" style={{ background: 'var(--err)' }} />
+          <span style={{ fontSize: 11.5 }}>Introuvable</span>
+        </span>
+      );
+    case 'nopj':
+      return (
+        <span
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#8a6d2c' }}
+          title="Transaction QBO trouvée mais sans pièce jointe"
+        >
+          <span className="dot" style={{ background: '#d8b257' }} />
+          <span style={{ fontSize: 11.5 }}>Sans PJ</span>
+        </span>
+      );
+    default:
+      return (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--warn)' }}>
+          <span className="dot dot-warn" />
+          <span style={{ fontSize: 11.5 }}>{t('status.missing')}</span>
+        </span>
+      );
+  }
 }
