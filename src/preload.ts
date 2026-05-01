@@ -50,6 +50,7 @@ const api = {
 
   // Dev / diagnostics — opens (or closes) DevTools in detached mode.
   openDevtools: () => ipcRenderer.invoke('dev:openDevtools'),
+  diagnose: (companyKey: string) => ipcRenderer.invoke('dev:diagnose', companyKey),
 
   // Google OAuth + Sheets
   googleConnect: (companyKey: string) => ipcRenderer.invoke('google:connect', companyKey),

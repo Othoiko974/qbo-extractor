@@ -76,6 +76,61 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     return { ok: true };
   });
 
+  // One-shot diagnostic dump: runs through every layer the renderer
+  // can't see (Secrets storage availability, proxy config, live ping,
+  // local token presence) for a given company. The user pastes the
+  // output back so we don't have to play 20-questions over chat.
+  ipcMain.handle('dev:diagnose', async (_evt, companyKey: string) => {
+    const out: Record<string, unknown> = { companyKey, ts: new Date().toISOString() };
+    try {
+      const company = Companies.get(companyKey);
+      out.company = company
+        ? {
+            label: company.label,
+            qbo_realm_id: company.qbo_realm_id,
+            qbo_env: company.qbo_env,
+            qbo_connected: company.qbo_connected,
+          }
+        : null;
+
+      const safeStorageAvail = (await import('electron')).safeStorage.isEncryptionAvailable();
+      out.safeStorageAvailable = safeStorageAvail;
+
+      out.proxyMode = isProxyMode(companyKey);
+      out.proxyUrl = Settings.get('qbo_proxy_url') ?? null;
+      const apiKey = await Secrets.getQboProxyApiKey(companyKey);
+      out.hasApiKey = !!apiKey;
+      out.apiKeyPreview = apiKey ? apiKey.slice(0, 8) + '…' + apiKey.slice(-4) : null;
+
+      const localToken = await Secrets.getQbo(companyKey);
+      out.hasLocalToken = !!localToken;
+      if (localToken) {
+        out.localTokenExpiresInSec = Math.round((localToken.expires_at - Date.now()) / 1000);
+      }
+
+      // Live proxy ping (only meaningful when we'd actually use it).
+      if (apiKey) {
+        try {
+          const health = await pingProxyHealth(companyKey);
+          out.proxyPing = health;
+        } catch (err) {
+          out.proxyPing = { error: errMsg(err) };
+        }
+      }
+
+      // Is the engine claim path reachable?
+      try {
+        const inspect = await inspectExtraction(companyKey);
+        out.extractionLockState = inspect;
+      } catch (err) {
+        out.extractionLockState = { error: errMsg(err) };
+      }
+    } catch (err) {
+      out.fatalError = errMsg(err);
+    }
+    return out;
+  });
+
   // Forward every QBO HTTP request (v3 API only — signed-URL CDN downloads
   // don't count toward Intuit's rate limit, so they're filtered upstream)
   // to the renderer so the Extraction screen can show real req/min cadence.
