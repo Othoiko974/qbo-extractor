@@ -244,6 +244,38 @@ export const useStore = create<Store>((set, get) => ({
       set({ resolverLoading: false, resolverError: res.error ?? 'Échec du téléchargement.' });
       return;
     }
+    // Mirror the resolved status onto the budget row so the Dashboard
+    // chip flips to "Extraite" without a reload. Mirrors what
+    // applyUpdate does for normal-run events, only this path doesn't
+    // go through the engine's update emitter.
+    const newStatus = res.status ?? 'ok';
+    const newFilePath = res.filePath;
+    set((s) => ({
+      extraction: s.extraction.map((r) =>
+        r.id === rowId
+          ? {
+              ...r,
+              status: newStatus,
+              qboTxnId: txnId ?? r.qboTxnId,
+              qboTxnType: txnType ?? r.qboTxnType,
+              resultFilePath: newFilePath ?? r.resultFilePath,
+              resultFileName: newFilePath ? newFilePath.split('/').pop() : r.resultFileName,
+            }
+          : r,
+      ),
+      budget: s.budget.map((r) =>
+        r.id === rowId
+          ? {
+              ...r,
+              extractionStatus: newStatus,
+              extractionFilePath: newFilePath ?? r.extractionFilePath,
+              extractionTxnId: txnId ?? r.extractionTxnId,
+              extractionTxnType: txnType ?? r.extractionTxnType,
+              extractedAt: Date.now(),
+            }
+          : r,
+      ),
+    }));
     set({
       resolverLoading: false,
       resolverRowId: null,
@@ -460,8 +492,28 @@ export const useStore = create<Store>((set, get) => ({
           }
         : r,
     );
+    // Mirror the same status onto the budget array — the Dashboard's
+    // status pills read from budget[], so without this the per-row
+    // chips stay frozen on "À extraire" until a full reload (Cmd+R)
+    // re-pulls budget:read with extraction history. Catch every
+    // terminal status, not just 'ok' — 'amb', 'nf' and 'nopj' all
+    // need to surface live too so the user sees the resolver pop up
+    // on the right rows without hunting.
+    const budget = state.budget.map((r) =>
+      r.id === u.rowId
+        ? {
+            ...r,
+            extractionStatus: u.status,
+            extractionFilePath: u.filePath ?? r.extractionFilePath,
+            extractionTxnId: u.txnId ?? r.extractionTxnId,
+            extractionTxnType: u.txnType ?? r.extractionTxnType,
+            extractedAt: Date.now(),
+          }
+        : r,
+    );
     set({
       extraction,
+      budget,
       counts: u.counts,
       running: !u.finished,
     });
