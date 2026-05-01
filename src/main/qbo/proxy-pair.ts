@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { shell, type BrowserWindow } from 'electron';
-import { Settings } from '../db/repo';
+import { Companies, Settings } from '../db/repo';
 import { Secrets } from '../secrets';
 
 // Browser-based pairing flow:
@@ -85,8 +85,18 @@ export async function handlePairDeepLink(
     const j = (await res.json()) as { api_key: string; realm_id: string; label: string };
     if (!j.api_key) throw new Error('Réponse du proxy sans api_key.');
     await Secrets.setQboProxyApiKey(entry.companyKey, j.api_key);
-    Settings.set('qbo_proxy_enabled', '1');
+    // Per-company toggle (the global key was the v0.1 shape and is no
+    // longer read by isProxyMode). Without this, the engine fell through
+    // to the local-OAuth branch and reported "Token absent" right after a
+    // successful pairing.
+    Settings.set(`qbo_proxy_enabled:${entry.companyKey}`, '1');
     if (!Settings.get('qbo_proxy_url')) Settings.set('qbo_proxy_url', proxyUrl());
+    // Mirror the realm into the company row + flip qbo_connected so the
+    // sidebar pill stops bluffing. Pairing IS a form of connecting.
+    Companies.update(entry.companyKey, {
+      qbo_realm_id: j.realm_id,
+      qbo_connected: 1,
+    });
     entry.resolve({ realmId: j.realm_id, label: j.label });
   } catch (err) {
     entry.reject(err instanceof Error ? err : new Error(String(err)));

@@ -100,8 +100,17 @@ button { font-family: inherit; }
 .dot-idle { background: #c4bfb5; }
 .dot-run { background: #3d6b99; box-shadow: 0 0 0 3px rgba(61,107,153,.18); animation: pulse 1.2s infinite; }
 .dot-pulse { background: #3d6b99; animation: pulse 1.2s infinite; }
-/* Yellow ring = "DB says connected, but never verified this session." */
-.dot-stale { background: #4a8760; box-shadow: 0 0 0 2px #f5e9b8; }
+/* Hollow ring = "DB says connected at some point, but unverified this
+   session." Visually distinct from solid green so users don't confuse
+   stale-with-confirmed. */
+.dot-stale {
+  background: transparent;
+  border: 1.5px solid #4a8760;
+  /* Compensate the border so the dot stays the same outer size as solid
+     dots and doesn't shift the row layout. */
+  width: 5px;
+  height: 5px;
+}
 @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(61,107,153,.25); } 50% { box-shadow: 0 0 0 5px rgba(61,107,153,0); } }
 
 .lab { font-size: 11px; color: var(--muted); font-family: var(--mono); letter-spacing: .02em; }

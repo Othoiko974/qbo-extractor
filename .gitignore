@@ -90,3 +90,6 @@ typings/
 
 # Electron-Forge
 out/
+# Squirrel.Windows drops a RELEASES manifest at the repo root when you
+# run `npm run make` on Windows — it's a build artifact, not source.
+RELEASES
