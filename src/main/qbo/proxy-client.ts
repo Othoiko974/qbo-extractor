@@ -25,8 +25,15 @@ export async function getProxyConfig(companyKey: string): Promise<ProxyConfig | 
   return { url: url.replace(/\/$/, ''), apiKey };
 }
 
-export function isProxyMode(): boolean {
-  return Settings.get('qbo_proxy_enabled') === '1';
+// Per-company proxy mode: each company decides independently whether it
+// uses the centralized server proxy or the local OAuth flow. This is the
+// right granularity because pairing is per-company too — global toggle
+// previously caused "I enabled proxy for Altitude and now TDL is broken
+// because it doesn't have a key yet."
+//
+// Setting key: `qbo_proxy_enabled:{companyKey}` = '1' | '0'
+export function isProxyMode(companyKey: string): boolean {
+  return Settings.get(`qbo_proxy_enabled:${companyKey}`) === '1';
 }
 
 async function callProxy<T>(
@@ -36,6 +43,9 @@ async function callProxy<T>(
   body?: unknown,
 ): Promise<T> {
   const url = `${config.url}${path}`;
+  // 30 s timeout — search-by-doc-number can take a few seconds on a busy
+  // realm (3 parallel QBO queries) but anything past 30 s is a network
+  // hang we want to surface as an error instead of freezing the run loop.
   const res = await fetch(url, {
     method,
     headers: {
@@ -44,6 +54,7 @@ async function callProxy<T>(
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) {
     let detail = `${res.status}`;
@@ -126,7 +137,12 @@ export class QboProxyClient {
     const c = await this.config();
     const fileName = encodeURIComponent(attachable.FileName ?? `attachment-${attachable.Id}`);
     const url = `${c.url}/api/qbo/attachments/${attachable.Id}/download?fileName=${fileName}`;
-    const res = await fetch(url, { headers: { 'X-API-Key': c.apiKey } });
+    // 60 s — large PDF/JPEG attachments stream through the proxy and can
+    // legitimately take a while on slow connections.
+    const res = await fetch(url, {
+      headers: { 'X-API-Key': c.apiKey },
+      signal: AbortSignal.timeout(60_000),
+    });
     if (!res.ok) {
       throw new QboApiError(`Téléchargement proxy a échoué (${res.status})`, res.status);
     }

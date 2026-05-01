@@ -125,7 +125,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
       return { ok: false, error: 'QBO non connecté pour cette entreprise.' };
     }
     let tokenExpiresInSec: number | undefined;
-    if (isProxyMode()) {
+    if (isProxyMode(companyKey)) {
       const health = await pingProxyHealth(companyKey);
       if (!health.ok) return { ok: false, error: health.error };
       if (!health.connected) return { ok: false, error: 'Proxy joignable mais aucun realm connecté.' };
@@ -177,7 +177,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
   ipcMain.handle('qbo:proxy:getConfig', async (_evt, companyKey: string) => {
     const apiKey = companyKey ? await Secrets.getQboProxyApiKey(companyKey) : null;
     return {
-      enabled: isProxyMode(),
+      enabled: companyKey ? isProxyMode(companyKey) : false,
       url: Settings.get('qbo_proxy_url') ?? '',
       hasApiKey: !!apiKey,
       apiKeyPreview: apiKey ? apiKey.slice(0, 8) + '…' + apiKey.slice(-4) : null,
@@ -191,7 +191,11 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
       config: { companyKey: string; enabled: boolean; url: string; apiKey?: string },
     ) => {
       try {
-        Settings.set('qbo_proxy_enabled', config.enabled ? '1' : '0');
+        // Per-company toggle. URL stays global (one Vercel deployment shared
+        // by every company on the machine).
+        if (config.companyKey) {
+          Settings.set(`qbo_proxy_enabled:${config.companyKey}`, config.enabled ? '1' : '0');
+        }
         Settings.set('qbo_proxy_url', (config.url ?? '').trim());
         if (
           config.companyKey &&
@@ -872,7 +876,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
       if (!company || !company.qbo_realm_id) {
         return { ok: false, error: 'Compagnie introuvable.' };
       }
-      if (!isProxyMode()) {
+      if (!isProxyMode(company.key)) {
         const token = await Secrets.getQbo(company.key);
         if (!token) return { ok: false, error: 'Token QBO manquant.' };
       }
@@ -954,7 +958,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
         attachableKinds: string[];
       }> = [];
       for (const sister of sisters) {
-        if (!isProxyMode()) {
+        if (!isProxyMode(sister.key)) {
           const token = await Secrets.getQbo(sister.key);
           if (!token) continue;
         }

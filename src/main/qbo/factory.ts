@@ -17,7 +17,7 @@ export function createQboClient(
   env: 'sandbox' | 'production',
   region: 'us' | 'ca' = 'us',
 ): QboLike {
-  if (isProxyMode()) {
+  if (isProxyMode(companyKey)) {
     return new QboProxyClient(companyKey, realmId, env, region);
   }
   return new QboClient(companyKey, realmId, env, region);

@@ -255,6 +255,37 @@ function CompanyItem({
   onClick: () => void;
 }) {
   const isOwner = !!company.isProjectOwner;
+  const test = useStore((s) => s.connectionTests[company.key]);
+  const testCompanyConnection = useStore((s) => s.testCompanyConnection);
+
+  // Live test result wins over the stale `company.connected` DB flag —
+  // that flag was set the last time OAuth succeeded and stays sticky
+  // even if the API key was revoked or proxy URL changed.
+  const dotKind: 'ok' | 'fail' | 'testing' | 'unknown' = test
+    ? test.status
+    : company.connected
+    ? 'unknown' // green-ish but unverified
+    : 'fail'; // never connected — red
+
+  const dotClass =
+    dotKind === 'ok'
+      ? 'dot-ok'
+      : dotKind === 'fail'
+      ? 'dot-idle'
+      : dotKind === 'testing'
+      ? 'dot-pulse'
+      : 'dot-stale';
+
+  const dotTitle = test
+    ? test.status === 'testing'
+      ? 'Test en cours…'
+      : test.status === 'ok'
+      ? `Connecté (testé il y a ${Math.max(1, Math.round((Date.now() - test.testedAt) / 1000))}s)`
+      : `Échec : ${test.error ?? 'erreur'} — clique pour re-tester`
+    : company.connected
+    ? 'Marqué connecté (non vérifié) — clique pour tester maintenant'
+    : 'Non connecté — clique pour tester quand même';
+
   return (
     <div
       onClick={onClick}
@@ -311,8 +342,13 @@ function CompanyItem({
         {company.label}
       </span>
       <span
-        className={`dot ${company.connected ? 'dot-ok' : 'dot-idle'}`}
-        title={company.connected ? 'Connecté' : 'Non connecté'}
+        className={`dot ${dotClass}`}
+        title={dotTitle}
+        onClick={(e) => {
+          e.stopPropagation(); // don't trigger the company-row activation
+          if (test?.status !== 'testing') void testCompanyConnection(company.key);
+        }}
+        style={{ cursor: 'pointer' }}
       />
     </div>
   );

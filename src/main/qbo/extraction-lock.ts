@@ -58,6 +58,9 @@ async function callExtraction(
   if (!cfg) {
     throw new Error('Mode proxy actif mais API key absente pour cette compagnie.');
   }
+  // 10 s timeout so a network blip / DNS hang doesn't freeze the whole
+  // extraction startup. The engine returns the AbortError as a regular
+  // claim failure and the UI surfaces it.
   const res = await fetch(`${cfg.url}/api/qbo/extraction/${path}`, {
     method,
     headers: {
@@ -66,6 +69,7 @@ async function callExtraction(
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(10_000),
   });
   let json: unknown = null;
   const text = await res.text();
@@ -81,7 +85,7 @@ export async function claimExtraction(
   companyKey: string,
   totalRows: number,
 ): Promise<ClaimResult> {
-  if (!isProxyMode()) return { ok: true }; // Local mode — no shared coordinator.
+  if (!isProxyMode(companyKey)) return { ok: true }; // Local mode — no shared coordinator.
   try {
     const { status, json } = await callExtraction(companyKey, 'POST', 'claim', {
       total_rows: totalRows,
@@ -98,7 +102,7 @@ export async function claimExtraction(
 }
 
 export async function heartbeatExtraction(companyKey: string): Promise<boolean> {
-  if (!isProxyMode()) return true;
+  if (!isProxyMode(companyKey)) return true;
   try {
     const { status } = await callExtraction(companyKey, 'POST', 'heartbeat');
     return status === 200;
@@ -108,7 +112,7 @@ export async function heartbeatExtraction(companyKey: string): Promise<boolean> 
 }
 
 export async function releaseExtraction(companyKey: string): Promise<void> {
-  if (!isProxyMode()) return;
+  if (!isProxyMode(companyKey)) return;
   try {
     await callExtraction(companyKey, 'POST', 'release');
   } catch {
@@ -117,7 +121,7 @@ export async function releaseExtraction(companyKey: string): Promise<void> {
 }
 
 export async function inspectExtraction(companyKey: string): Promise<LockStatus | { error: string }> {
-  if (!isProxyMode()) return { busy: false };
+  if (!isProxyMode(companyKey)) return { busy: false };
   try {
     const { status, json } = await callExtraction(companyKey, 'GET', 'status');
     if (status === 200 && json && typeof json === 'object') return json as LockStatus;

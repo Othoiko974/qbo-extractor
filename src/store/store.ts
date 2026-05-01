@@ -76,6 +76,15 @@ type Store = {
   qboRequestTimes: number[];
   pushQboRequestTime: (ts: number) => void;
 
+  // Per-company live connection test status. Persisted only in memory —
+  // each app launch starts untested. Clicking a sidebar dot triggers a
+  // real ping and writes the result here. Avoids the "green dot lies"
+  // problem where company.connected (a DB flag set during the last
+  // successful OAuth) shows green even after the API key was revoked or
+  // the proxy URL became stale.
+  connectionTests: Record<string, { status: 'testing' | 'ok' | 'fail'; testedAt: number; error?: string }>;
+  testCompanyConnection: (companyKey: string) => Promise<void>;
+
   // Cross-machine extraction lock state. Populated when startExtraction
   // hits a 409 from the proxy — the dialog reads this and offers to wait
   // (poll the proxy every 10 s) or cancel. Cleared once the lock frees
@@ -146,6 +155,29 @@ export const useStore = create<Store>((set, get) => ({
   resolverSisterSearched: false,
   qboRequestTimes: [],
   busyLock: null,
+  connectionTests: {},
+
+  testCompanyConnection: async (companyKey) => {
+    set((s) => ({
+      connectionTests: {
+        ...s.connectionTests,
+        [companyKey]: { status: 'testing', testedAt: Date.now() },
+      },
+    }));
+    const res = (await window.qboApi.qboTest(companyKey)) as
+      | { ok: true; companyName: string; legalName?: string }
+      | { ok: false; error?: string };
+    set((s) => ({
+      connectionTests: {
+        ...s.connectionTests,
+        [companyKey]: {
+          status: res.ok ? 'ok' : 'fail',
+          testedAt: Date.now(),
+          ...(res.ok ? {} : { error: res.error ?? 'Échec de la connexion.' }),
+        },
+      },
+    }));
+  },
 
   pushQboRequestTime: (ts) =>
     set((s) => {
@@ -346,13 +378,13 @@ export const useStore = create<Store>((set, get) => ({
     if (!key) return;
     const budget = get().budget;
     const selected = rowIds.length > 0 ? budget.filter((r) => rowIds.includes(r.id)) : budget;
-    const initial: ExtractionRow[] = selected.map((r) => ({ ...r, status: 'queue' }));
+    // Don't switch to the Extraction screen until the engine has confirmed
+    // the run actually started — otherwise an early error (no API key,
+    // proxy unreachable, etc.) leaves the user stuck on an empty Extraction
+    // screen with no visible feedback.
     set({
-      extraction: initial,
-      counts: { ok: 0, amb: 0, nf: 0, nopj: 0, total: selected.length, done: 0 },
       running: true,
       paused: false,
-      screen: 'extraction',
       error: null,
       busyLock: null,
     });
@@ -370,14 +402,11 @@ export const useStore = create<Store>((set, get) => ({
       };
     };
     if (res.busy) {
-      // Another teammate holds the lock. Park the row selection so the
-      // "Attendre" path can retry once the lock frees, and roll the UI
-      // back to dashboard so the user isn't stuck on an empty Extraction
-      // screen mid-modal.
+      // Another teammate holds the lock — show the modal but stay on
+      // whichever screen we were on (typically dashboard).
       set({
         running: false,
         busyLock: { ...res.busy, pendingRowIds: rowIds },
-        screen: 'dashboard',
       });
       return;
     }
@@ -385,7 +414,14 @@ export const useStore = create<Store>((set, get) => ({
       set({ running: false, error: res.error ?? 'Démarrage impossible.' });
       return;
     }
-    set({ runId: res.runId ?? null });
+    // Run actually started. NOW switch to the Extraction screen and seed it.
+    const initial: ExtractionRow[] = selected.map((r) => ({ ...r, status: 'queue' }));
+    set({
+      extraction: initial,
+      counts: { ok: 0, amb: 0, nf: 0, nopj: 0, total: selected.length, done: 0 },
+      screen: 'extraction',
+      runId: res.runId ?? null,
+    });
   },
 
   dismissBusyLock: () => set({ busyLock: null }),

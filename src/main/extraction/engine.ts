@@ -115,7 +115,7 @@ export class ExtractionEngine {
     const company = Companies.get(companyKey);
     if (!company) return { error: 'Entreprise introuvable.' };
     if (!company.qbo_realm_id) return { error: 'QuickBooks non connecté pour cette entreprise.' };
-    if (isProxyMode()) {
+    if (isProxyMode(companyKey)) {
       const cfg = await getProxyConfig(companyKey);
       if (!cfg) return { error: 'Mode proxy actif mais API key absente pour cette compagnie — configure-la dans Connect.' };
     } else {
@@ -181,7 +181,7 @@ export class ExtractionEngine {
 
     // Heartbeat the lock every 60s. Server TTL is 5 min, so a single
     // missed beat (network blip) doesn't drop the lock.
-    if (isProxyMode()) {
+    if (isProxyMode(companyKey)) {
       this.current.heartbeatTimer = setInterval(() => {
         void heartbeatExtraction(companyKey);
       }, 60_000);
@@ -612,7 +612,7 @@ export class ExtractionEngine {
     if (!fetchCompany || !fetchCompany.qbo_realm_id) {
       return { ok: false, error: 'Entreprise source / connexion QBO indisponible.' };
     }
-    if (isProxyMode()) {
+    if (isProxyMode(fetchCompany.key)) {
       const cfg = await getProxyConfig(fetchCompany.key);
       if (!cfg) return { ok: false, error: 'Mode proxy actif mais API key absente pour la compagnie source.' };
     } else {
