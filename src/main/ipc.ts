@@ -698,7 +698,14 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
   );
 
   ipcMain.handle('extraction:start', async (_evt, companyKey: string, rowIds: string[]) => {
-    const cached = BudgetCache.get(companyKey);
+    // Budget cache is keyed by project_id — every company in a project
+    // shares the same source workbook. Look up the project first instead
+    // of indexing the cache by companyKey (the projects refactor moved
+    // this and this call site was missed).
+    const company = Companies.get(companyKey);
+    if (!company) return { ok: false, error: 'Entreprise introuvable.' };
+    const project = projectForCompany(company);
+    const cached = project ? BudgetCache.get(project.id) : null;
     if (!cached) return { ok: false, error: 'Aucun budget en cache — synchroniser d\'abord.' };
     const allRows = cached.rows as BudgetRow[];
     const selected = rowIds.length > 0 ? allRows.filter((r) => rowIds.includes(r.id)) : allRows;
