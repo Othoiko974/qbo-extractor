@@ -35,7 +35,18 @@ const FOLDER_PRESETS: { label: string; value: string }[] = [
 
 export function Settings() {
   useLang();
-  const { settings, updateSettings, setScreen, companies, projects, loadCompanies, loadProjects, setActiveCompany } = useStore();
+  const {
+    settings,
+    updateSettings,
+    setScreen,
+    companies,
+    projects,
+    loadCompanies,
+    loadProjects,
+    setActiveCompany,
+    activeCompanyKey,
+    loadBudget,
+  } = useStore();
   const [baseFolder, setBaseFolder] = useState(settings.base_folder ?? '');
   const [template, setTemplate] = useState(
     settings.naming_template ?? 'Depense_{num}_{fournisseur}_{date}_{montant}',
@@ -286,6 +297,13 @@ export function Settings() {
           projects={projects}
           reloadProjects={loadProjects}
           reloadCompanies={loadCompanies}
+          reloadBudget={() => {
+            // Re-read the budget for whichever company the user has
+            // active so the Dashboard's per-row status pills clear
+            // after a wipe. No-op when no company is selected yet
+            // (typical onboarding state).
+            if (activeCompanyKey) void loadBudget(activeCompanyKey);
+          }}
           onConfigureQbo={(companyKey) => {
             setActiveCompany(companyKey);
             setScreen('connect');
@@ -635,6 +653,7 @@ function ProjectsSection({
   projects,
   reloadProjects,
   reloadCompanies,
+  reloadBudget,
   onConfigureQbo,
   onConfigureBudget,
   onExportImportQbo,
@@ -644,6 +663,7 @@ function ProjectsSection({
   projects: Project[];
   reloadProjects: () => Promise<void>;
   reloadCompanies: () => Promise<void>;
+  reloadBudget: () => void;
   onConfigureQbo: (companyKey: string) => void;
   onConfigureBudget: (projectId: string) => void;
   onExportImportQbo: (companyKey: string) => void;
@@ -706,6 +726,27 @@ function ProjectsSection({
     await reloadProjects();
   };
 
+  const wipeExtractions = async (projectId: string, projectName: string) => {
+    setError(null);
+    const ok = window.confirm(
+      `Réinitialiser l'historique d'extraction de « ${projectName} » ?\n\nTous les runs précédents seront supprimés (y compris les lignes ambiguës en attente, les non-trouvées, etc.).\n\nLes fichiers déjà téléchargés sur le disque ne sont PAS effacés.`,
+    );
+    if (!ok) return;
+    const res = (await window.qboApi.extractionWipeProject(projectId)) as {
+      ok: boolean;
+      deletedRuns?: number;
+      error?: string;
+    };
+    if (!res.ok) {
+      setError(res.error ?? 'Échec de la réinitialisation.');
+      return;
+    }
+    // Trigger a budget reload so the Dashboard's status pills clear
+    // immediately. Without this the user has to switch screens or
+    // resync to see the wipe take effect.
+    reloadBudget();
+  };
+
   // Owners always have a project_id, so they're never in the orphans
   // list. The filter is defensive — a corrupted DB row wouldn't sneak
   // its way into the user-facing "Sans projet" block.
@@ -737,6 +778,7 @@ function ProjectsSection({
             onRename={(name) => void rename(p.id, name)}
             onDelete={() => void remove(p.id)}
             onConfigureBudget={() => onConfigureBudget(p.id)}
+            onWipeExtractions={() => wipeExtractions(p.id, p.name)}
             onAddCompany={() => onAddCompany(p.id)}
             onConfigureQbo={onConfigureQbo}
             onExportImportQbo={onExportImportQbo}
@@ -798,6 +840,7 @@ function ProjectCard({
   onRename,
   onDelete,
   onConfigureBudget,
+  onWipeExtractions,
   onAddCompany,
   onConfigureQbo,
   onExportImportQbo,
@@ -810,6 +853,7 @@ function ProjectCard({
   onRename: (name: string) => void;
   onDelete: () => void;
   onConfigureBudget: () => void;
+  onWipeExtractions: () => Promise<void>;
   onAddCompany: () => void;
   onConfigureQbo: (companyKey: string) => void;
   onExportImportQbo: (companyKey: string) => void;
@@ -920,9 +964,23 @@ function ProjectCard({
         ))}
       </div>
 
-      <button className="btn btn-sm" onClick={onAddCompany}>
-        <Icon name="plus" size={11} /> Ajouter une compagnie au projet
-      </button>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', alignItems: 'center' }}>
+        <button className="btn btn-sm" onClick={onAddCompany}>
+          <Icon name="plus" size={11} /> Ajouter une compagnie au projet
+        </button>
+        {/* Destructive but reversible (the user can re-extract). Sat
+            here next to the lower-traffic actions instead of the
+            header where the per-project delete lives — wipe is rare
+            and "danger zone"-flavoured but doesn't kill the project. */}
+        <button
+          className="btn btn-sm btn-ghost"
+          onClick={() => void onWipeExtractions()}
+          title="Supprime tous les runs précédents de ce projet (les fichiers déjà téléchargés sur disque ne sont pas effacés)"
+          style={{ color: 'var(--err)' }}
+        >
+          Réinitialiser l'historique d'extraction
+        </button>
+      </div>
     </div>
   );
 }

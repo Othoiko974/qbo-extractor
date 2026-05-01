@@ -195,6 +195,14 @@ const api = {
   extractionPause: () => ipcRenderer.invoke('extraction:pause'),
   extractionResume: () => ipcRenderer.invoke('extraction:resume'),
   extractionStop: () => ipcRenderer.invoke('extraction:stop'),
+  // Wipe the extraction history (runs + cascaded rows / candidates)
+  // for every company belonging to the given project. Used by the
+  // Settings → Réinitialiser l'historique d'extraction action. Files
+  // on disk are not touched.
+  extractionWipeProject: (
+    projectId: string,
+  ): Promise<{ ok: boolean; deletedRuns?: number; error?: string }> =>
+    ipcRenderer.invoke('extraction:wipeProject', projectId),
   extractionEstimate: (rowCount: number) =>
     ipcRenderer.invoke('extraction:estimate', rowCount),
   extractionLockStatus: (companyKey: string) =>

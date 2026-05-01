@@ -737,6 +737,19 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
     return { ok: true };
   });
 
+  // Reset the extraction history for a project — deletes every run
+  // (and its rows / candidates via cascade) tied to any company in
+  // the project. Files already on disk stay; the next Dashboard read
+  // sees no extraction history and shows every budget row as "À
+  // extraire" again. Renderer is responsible for re-loading the
+  // budget afterwards (no auto-emit from main, the Settings caller
+  // already does it).
+  ipcMain.handle('extraction:wipeProject', async (_evt, projectId: string) => {
+    if (!projectId) return { ok: false, error: 'projectId requis.' };
+    const deleted = Runs.deleteByProject(projectId);
+    return { ok: true, deletedRuns: deleted };
+  });
+
   // List the QBO candidates persisted for an ambiguous run row, decoded into
   // a renderer-friendly shape (attachable_kinds JSON expanded).
   ipcMain.handle('extraction:listCandidates', async (_evt, runRowId: string) => {

@@ -212,6 +212,22 @@ export const Runs = {
     const finished = status === 'done' || status === 'cancelled' ? Date.now() : null;
     getDb().prepare('UPDATE runs SET status=?, finished_at=? WHERE id=?').run(status, finished, id);
   },
+  // Wipe every run (and the rows / candidates that hang off them via
+  // ON DELETE CASCADE) for any company belonging to the project. Used
+  // by the Settings → Réinitialiser l'historique d'extraction action
+  // — lets the user start over after, e.g., a bad naming-template
+  // rollout that produced files the engine should re-fetch under the
+  // corrected names. Files already on disk are NOT touched.
+  deleteByProject(projectId: string): number {
+    const result = getDb()
+      .prepare(
+        `DELETE FROM runs WHERE company_key IN (
+           SELECT key FROM companies WHERE project_id = ?
+         )`,
+      )
+      .run(projectId);
+    return result.changes;
+  },
 };
 
 export type RunRowRow = {
