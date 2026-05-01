@@ -47,18 +47,38 @@ export function AmbiguousResolver() {
   // returns to the candidate list with all picked / sister state intact,
   // unlike navigating away to the full Preview screen.
   const [previewState, setPreviewState] = React.useState<{
+    companyKey: string;
+    txnId: string;
+    txnType: 'Bill' | 'Purchase' | 'Invoice';
     filePath: string;
     contentType: string;
     fileName: string;
     isRefacturation: boolean;
+    // Multi-file pager — populated when the txn has >1 attachment so the
+    // overlay can swap between them without closing.
+    attachables: Array<{ id: string; fileName: string; contentType: string | null }>;
+    currentAttachableId: string;
   } | null>(null);
   const [previewLoading, setPreviewLoading] = React.useState<string | null>(null);
   const [previewError, setPreviewError] = React.useState<string | null>(null);
+
+  // Background detection of "is this candidate's first attachment a QBO
+  // re-billing template?" Fires for every candidate as soon as the
+  // resolver loads them, so the user sees the warning badge before
+  // having to click preview on each one. Side benefit: the preview-cache
+  // file ends up on disk, so subsequent click-to-preview is instant.
+  type DetectState = { state: 'loading' | 'done' | 'error'; isRefacturation?: boolean };
+  const [detected, setDetected] = React.useState<Record<string, DetectState>>({});
+  const candidateKey = React.useCallback(
+    (companyKey: string, txnType: string, txnId: string) => `${companyKey}|${txnType}|${txnId}`,
+    [],
+  );
 
   const openInlinePreview = async (
     companyKey: string,
     txnId: string,
     txnType: 'Bill' | 'Purchase' | 'Invoice',
+    attachableId?: string,
   ) => {
     const key = `${companyKey}|${txnType}|${txnId}`;
     setPreviewLoading(key);
@@ -68,22 +88,30 @@ export function AmbiguousResolver() {
         companyKey,
         txnId,
         txnType,
+        attachableId,
       )) as {
         ok: boolean;
         filePath?: string;
         contentType?: string;
         fileName?: string;
         isRefacturation?: boolean;
+        attachables?: Array<{ id: string; fileName: string; contentType: string | null }>;
+        currentAttachableId?: string;
         error?: string;
       };
       if (!res.ok || !res.filePath) {
         setPreviewError(res.error ?? 'Échec du chargement de la pièce jointe.');
       } else {
         setPreviewState({
+          companyKey,
+          txnId,
+          txnType,
           filePath: res.filePath,
           contentType: res.contentType ?? '',
           fileName: res.fileName ?? '',
           isRefacturation: res.isRefacturation ?? false,
+          attachables: res.attachables ?? [],
+          currentAttachableId: res.currentAttachableId ?? attachableId ?? '',
         });
       }
     } catch (err) {
@@ -95,7 +123,54 @@ export function AmbiguousResolver() {
 
   React.useEffect(() => {
     setPicked(null);
+    setDetected({});
   }, [resolverRowId]);
+
+  // Background prefetch + refacturation detection for each candidate.
+  // Runs in parallel; results trickle in. Skips candidates with no
+  // attachments and re-uses the in-memory cache when the user re-opens
+  // the same row's resolver.
+  React.useEffect(() => {
+    if (!activeCompanyKey || resolverCandidates.length === 0) return;
+    const toFetch = resolverCandidates.filter(
+      (c) => c.attachableCount > 0 && !detected[candidateKey(activeCompanyKey, c.txnType, c.txnId)],
+    );
+    if (toFetch.length === 0) return;
+    setDetected((cur) => {
+      const next = { ...cur };
+      for (const c of toFetch) {
+        next[candidateKey(activeCompanyKey, c.txnType, c.txnId)] = { state: 'loading' };
+      }
+      return next;
+    });
+    let cancelled = false;
+    void Promise.all(
+      toFetch.map(async (c) => {
+        const k = candidateKey(activeCompanyKey, c.txnType, c.txnId);
+        try {
+          const res = (await window.qboApi.previewAttachable(
+            activeCompanyKey,
+            c.txnId,
+            c.txnType as 'Bill' | 'Purchase' | 'Invoice',
+          )) as { ok: boolean; isRefacturation?: boolean };
+          if (cancelled) return;
+          setDetected((cur) => ({
+            ...cur,
+            [k]: res.ok
+              ? { state: 'done', isRefacturation: !!res.isRefacturation }
+              : { state: 'error' },
+          }));
+        } catch {
+          if (cancelled) return;
+          setDetected((cur) => ({ ...cur, [k]: { state: 'error' } }));
+        }
+      }),
+    );
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolverCandidates, activeCompanyKey, candidateKey]);
 
   if (!row) {
     return (
@@ -379,6 +454,11 @@ export function AmbiguousResolver() {
                 }
                 onPreview={openInlinePreview}
                 previewLoading={previewLoading === previewKey}
+                detect={
+                  activeCompanyKey
+                    ? detected[candidateKey(activeCompanyKey, c.txnType, c.txnId)]
+                    : undefined
+                }
               />
             );
           })}
@@ -500,6 +580,16 @@ export function AmbiguousResolver() {
           contentType={previewState.contentType}
           fileName={previewState.fileName}
           isRefacturation={previewState.isRefacturation}
+          attachables={previewState.attachables}
+          currentAttachableId={previewState.currentAttachableId}
+          onSwitchAttachable={(id) =>
+            void openInlinePreview(
+              previewState.companyKey,
+              previewState.txnId,
+              previewState.txnType,
+              id,
+            )
+          }
           onClose={() => setPreviewState(null)}
         />
       )}
@@ -516,14 +606,31 @@ function InlinePreviewOverlay({
   contentType,
   fileName,
   isRefacturation,
+  attachables,
+  currentAttachableId,
+  onSwitchAttachable,
   onClose,
 }: {
   filePath: string;
   contentType: string;
   fileName: string;
   isRefacturation: boolean;
+  attachables: Array<{ id: string; fileName: string; contentType: string | null }>;
+  currentAttachableId: string;
+  onSwitchAttachable: (id: string) => void;
   onClose: () => void;
 }) {
+  const idx = Math.max(0, attachables.findIndex((a) => a.id === currentAttachableId));
+  const goPrev = () => {
+    if (attachables.length < 2) return;
+    const next = attachables[(idx - 1 + attachables.length) % attachables.length];
+    if (next) onSwitchAttachable(next.id);
+  };
+  const goNext = () => {
+    if (attachables.length < 2) return;
+    const next = attachables[(idx + 1) % attachables.length];
+    if (next) onSwitchAttachable(next.id);
+  };
   const url = toLocalFileUrl(filePath);
   const lower = (fileName + ' ' + contentType).toLowerCase();
   const isPdf = /\.pdf\b/.test(lower) || lower.includes('pdf');
@@ -536,11 +643,21 @@ function InlinePreviewOverlay({
       if (e.key === 'Escape') {
         e.stopPropagation();
         onClose();
+        return;
+      }
+      if (attachables.length > 1) {
+        if (e.key === 'ArrowLeft') {
+          e.stopPropagation();
+          goPrev();
+        } else if (e.key === 'ArrowRight') {
+          e.stopPropagation();
+          goNext();
+        }
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  }, [onClose, attachables.length, goPrev, goNext]);
 
   return (
     <div
@@ -627,6 +744,57 @@ function InlinePreviewOverlay({
             <span>{t('resolver.preview_refacturation_warn')}</span>
           </div>
         )}
+        {attachables.length > 1 && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '6px 8px',
+              background: 'var(--paper-2)',
+              borderRadius: 6,
+              fontSize: 12,
+            }}
+          >
+            <button
+              className="btn btn-sm btn-ghost"
+              onClick={goPrev}
+              title="Pièce précédente (←)"
+            >
+              ‹
+            </button>
+            <span className="muted" style={{ fontSize: 11 }}>
+              Pièce {idx + 1} / {attachables.length}
+            </span>
+            <button
+              className="btn btn-sm btn-ghost"
+              onClick={goNext}
+              title="Pièce suivante (→)"
+            >
+              ›
+            </button>
+            <div style={{ flex: 1 }} />
+            {/* Quick-jump dots */}
+            {attachables.map((a, i) => (
+              <button
+                key={a.id}
+                onClick={() => onSwitchAttachable(a.id)}
+                title={a.fileName}
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  border: 'none',
+                  padding: 0,
+                  cursor: 'pointer',
+                  background:
+                    i === idx ? 'var(--accent)' : 'var(--line)',
+                }}
+                aria-label={`Pièce ${i + 1}`}
+              />
+            ))}
+          </div>
+        )}
         {isPdf && (
           <iframe
             src={url}
@@ -676,6 +844,7 @@ function CandidateCard({
   onSelect,
   onPreview,
   previewLoading,
+  detect,
 }: {
   candidate: RunRowCandidate;
   selected: boolean;
@@ -686,6 +855,7 @@ function CandidateCard({
     txnType: 'Bill' | 'Purchase' | 'Invoice',
   ) => void;
   previewLoading?: boolean;
+  detect?: { state: 'loading' | 'done' | 'error'; isRefacturation?: boolean };
 }) {
   // Pull the active company's realmId so the deep-link URL routes to the
   // correct QBO company instead of whichever company the user's web
@@ -728,6 +898,24 @@ function CandidateCard({
       >
         {candidate.txnType}
       </span>
+      {detect?.state === 'done' && detect.isRefacturation && (
+        <span
+          className="chip chip-warn"
+          style={{ flexShrink: 0, fontSize: 10.5, padding: '3px 9px' }}
+          title={t('resolver.preview_refacturation_hint')}
+        >
+          ⚠ {t('resolver.preview_refacturation_warn')}
+        </span>
+      )}
+      {detect?.state === 'loading' && candidate.attachableCount > 0 && (
+        <span
+          className="muted"
+          style={{ flexShrink: 0, fontSize: 10.5, fontStyle: 'italic' }}
+          title="Analyse de la pièce jointe en cours…"
+        >
+          analyse…
+        </span>
+      )}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
           <span style={{ fontSize: 13.5, fontWeight: 600 }}>

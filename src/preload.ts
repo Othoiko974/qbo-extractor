@@ -248,7 +248,14 @@ const api = {
     companyKey: string,
     txnId: string,
     txnType: 'Bill' | 'Purchase' | 'Invoice',
-  ) => ipcRenderer.invoke('qbo:previewAttachable', { companyKey, txnId, txnType }),
+    attachableId?: string,
+  ) =>
+    ipcRenderer.invoke('qbo:previewAttachable', {
+      companyKey,
+      txnId,
+      txnType,
+      ...(attachableId ? { attachableId } : {}),
+    }),
 
   // Filesystem
   openFolder: (p: string) => ipcRenderer.invoke('fs:openFolder', p),

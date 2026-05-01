@@ -878,7 +878,18 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
   // through the QBO web app.
   ipcMain.handle(
     'qbo:previewAttachable',
-    async (_evt, args: { companyKey: string; txnId: string; txnType: 'Bill' | 'Purchase' | 'Invoice' }) => {
+    async (
+      _evt,
+      args: {
+        companyKey: string;
+        txnId: string;
+        txnType: 'Bill' | 'Purchase' | 'Invoice';
+        // Optional: preview a specific attachment by id. Defaults to the
+        // first one, which preserves the old single-file behavior for
+        // callers that don't care about multi-file txns.
+        attachableId?: string;
+      },
+    ) => {
       const company = Companies.get(args.companyKey);
       if (!company || !company.qbo_realm_id) {
         return { ok: false, error: 'Compagnie introuvable.' };
@@ -893,7 +904,9 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
         if (attachables.length === 0) {
           return { ok: false, error: 'Aucune pièce jointe sur cette transaction.' };
         }
-        const att = attachables[0];
+        const att = args.attachableId
+          ? attachables.find((a) => a.Id === args.attachableId) ?? attachables[0]!
+          : attachables[0]!;
         const dl = await client.downloadAttachment(att);
         const fileNameRaw = att.FileName || `attachment_${args.txnId}`;
         const safeName = fileNameRaw.replace(/[\\/:*?"<>|\n\r\t]/g, '_');
@@ -932,6 +945,15 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
           contentType: dl.contentType,
           fileName: fileNameRaw,
           isRefacturation,
+          // Surface the full attachment list so the renderer can show a
+          // pager when there's more than one file on the same transaction.
+          // Each entry has the minimum the UI needs to drive a swap.
+          attachables: attachables.map((a) => ({
+            id: a.Id,
+            fileName: a.FileName ?? `attachment_${a.Id}`,
+            contentType: a.ContentType ?? null,
+          })),
+          currentAttachableId: att.Id,
         };
       } catch (err) {
         return { ok: false, error: errMsg(err) };
