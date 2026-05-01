@@ -143,7 +143,20 @@ export class ExtractionEngine {
     const baseFolder = Settings.get('base_folder') ?? path.join(app.getPath('documents'), 'QBO Extracts');
     const template = Settings.get('naming_template') ?? 'Depense_{num}_{fournisseur}_{date}_{montant}';
     const folderTemplate = Settings.get('folder_template') ?? '';
-    const companyFolder = path.join(baseFolder, sanitizeFolder(company.label));
+    // Folder name follows the actual QBO CompanyName (authoritative) rather
+    // than the local company.label (which is whatever the user typed when
+    // creating the company in the desktop app and often diverges — e.g.
+    // "Altitude" locally vs. "Altitude 233 Inc" in QBO). Falls back to the
+    // local label if the ping fails so we never block extraction on it.
+    const client = createQboClient(companyKey, company.qbo_realm_id, company.qbo_env);
+    let folderName = company.label;
+    try {
+      const info = await client.ping();
+      if (info.ok && info.companyName) folderName = info.companyName;
+    } catch {
+      /* keep label fallback */
+    }
+    const companyFolder = path.join(baseFolder, sanitizeFolder(folderName));
     fs.mkdirSync(companyFolder, { recursive: true });
 
     const run = Runs.create(companyKey, rows.length, companyFolder);
@@ -187,7 +200,7 @@ export class ExtractionEngine {
       }, 60_000);
     }
 
-    const client = createQboClient(companyKey, company.qbo_realm_id, company.qbo_env);
+    // (client already created above for the CompanyName lookup)
 
     // Fire and forget; progress streams via IPC.
     this.runLoop(run, rows, persisted, client, companyFolder, template, folderTemplate)
