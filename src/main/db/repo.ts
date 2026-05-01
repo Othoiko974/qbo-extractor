@@ -276,6 +276,9 @@ export type RunRowCandidateRow = {
   vendor_name: string | null;
   txn_date: string | null;
   total_amount: number | null;
+  // HT subtotal — null when QBO didn't return TxnTaxDetail (Purchase
+  // entries from credit-card imports often lack tax breakdowns).
+  subtotal_amount: number | null;
   doc_number: string | null;
   attachable_count: number;
   attachable_kinds: string; // JSON array of strings
@@ -290,8 +293,8 @@ export const RunRowCandidates = {
     const stmt = getDb().prepare(
       `INSERT INTO run_row_candidates
         (run_row_id, qbo_txn_id, qbo_txn_type, vendor_name, txn_date, total_amount,
-         doc_number, attachable_count, attachable_kinds, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         subtotal_amount, doc_number, attachable_count, attachable_kinds, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const now = Date.now();
     const tx = getDb().transaction(() => {
@@ -303,6 +306,7 @@ export const RunRowCandidates = {
           c.vendor_name,
           c.txn_date,
           c.total_amount,
+          c.subtotal_amount,
           c.doc_number,
           c.attachable_count,
           c.attachable_kinds,

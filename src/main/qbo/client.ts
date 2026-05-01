@@ -84,6 +84,11 @@ export type QboBill = {
   DocNumber?: string;
   TxnDate?: string;
   TotalAmt?: number;
+  // QBO returns TotalAmt as TTC (after-tax). TxnTaxDetail.TotalTax lets
+  // us derive the HT (pre-tax) total: HT = TotalAmt - TotalTax. Bills /
+  // Invoices in Quebec almost always carry this; Purchase entries from
+  // credit-card imports often don't (the merchant doesn't itemize tax).
+  TxnTaxDetail?: { TotalTax?: number };
   // Bill uses VendorRef, Purchase uses EntityRef (Vendor/Customer/Employee),
   // Invoice uses CustomerRef. We surface a unified party name via _partyName
   // so callers can compare against the budget's vendor regardless of txn type.
@@ -92,6 +97,10 @@ export type QboBill = {
   CustomerRef?: { value: string; name?: string };
   _type: 'Bill' | 'Purchase' | 'Invoice';
   _partyName?: string;
+  // Derived HT total — null when no tax detail is available. Computed once
+  // at search time so downstream callers (engine matcher, resolver UI)
+  // don't have to re-extract from TxnTaxDetail.
+  _subtotalAmount?: number | null;
 };
 
 export type QboAttachable = {
@@ -295,16 +304,27 @@ export class QboClient {
           const customerRef = r.CustomerRef as { value: string; name?: string } | undefined;
           const partyName =
             entityRef?.name ?? vendorRef?.name ?? customerRef?.name;
+          const totalRaw = typeof r.TotalAmt === 'number' ? r.TotalAmt : Number(r.TotalAmt);
+          const totalAmt = Number.isFinite(totalRaw) ? totalRaw : undefined;
+          const taxDetail = r.TxnTaxDetail as { TotalTax?: number } | undefined;
+          const totalTax =
+            typeof taxDetail?.TotalTax === 'number' ? taxDetail.TotalTax : undefined;
+          const subtotal =
+            totalAmt !== undefined && totalTax !== undefined
+              ? Math.round((totalAmt - totalTax) * 100) / 100
+              : null;
           return {
             Id: String(r.Id),
             DocNumber: r.DocNumber as string | undefined,
             TxnDate: r.TxnDate as string | undefined,
-            TotalAmt: typeof r.TotalAmt === 'number' ? r.TotalAmt : Number(r.TotalAmt),
+            TotalAmt: totalAmt,
+            TxnTaxDetail: taxDetail,
             VendorRef: vendorRef,
             EntityRef: entityRef,
             CustomerRef: customerRef,
             _type: entity,
             _partyName: partyName,
+            _subtotalAmount: subtotal,
           };
         });
       }),

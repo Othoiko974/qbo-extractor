@@ -477,6 +477,7 @@ export class ExtractionEngine {
             vendor_name: e.hit._partyName ?? null,
             txn_date: e.hit.TxnDate ?? null,
             total_amount: typeof e.hit.TotalAmt === 'number' ? e.hit.TotalAmt : null,
+            subtotal_amount: typeof e.hit._subtotalAmount === 'number' ? e.hit._subtotalAmount : null,
             doc_number: e.hit.DocNumber ?? null,
             attachable_count: e.count,
             attachable_kinds: JSON.stringify(e.kinds),
@@ -675,8 +676,17 @@ export class ExtractionEngine {
 
 
 function matchesAmount(hit: QboBill, target: number): boolean {
-  if (typeof hit.TotalAmt !== 'number') return false;
-  return Math.abs(hit.TotalAmt - target) <= AMOUNT_TOLERANCE;
+  // Match against both TTC and HT — budget conventions vary (some sheets
+  // are HT, others TTC) and QBO always returns TotalAmt as TTC. A
+  // single-axis match would miss the candidate the moment the budget
+  // convention diverges from QBO's. Accept either side within tolerance.
+  if (typeof hit.TotalAmt === 'number') {
+    if (Math.abs(hit.TotalAmt - target) <= AMOUNT_TOLERANCE) return true;
+  }
+  if (typeof hit._subtotalAmount === 'number') {
+    if (Math.abs(hit._subtotalAmount - target) <= AMOUNT_TOLERANCE) return true;
+  }
+  return false;
 }
 
 function matchesDate(hit: QboBill, target: string): boolean {

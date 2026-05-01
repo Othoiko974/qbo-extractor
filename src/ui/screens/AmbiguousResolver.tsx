@@ -934,8 +934,11 @@ function CandidateCard({
         >
           {candidate.txnDate ?? '—'} ·{' '}
           {candidate.totalAmount != null
-            ? fmtCurrency(candidate.totalAmount)
-            : '—'}{' '}
+            ? fmtCurrency(candidate.totalAmount) + ' TTC'
+            : '—'}
+          {candidate.subtotalAmount != null && candidate.totalAmount != null && (
+            <> · {fmtCurrency(candidate.subtotalAmount)} HT</>
+          )}{' '}
           ·{' '}
           {candidate.attachableCount === 0
             ? t('resolver.no_attachment')
@@ -1052,8 +1055,11 @@ function SisterCandidateCard({
         >
           {candidate.txnDate ?? '—'} ·{' '}
           {candidate.totalAmount != null
-            ? fmtCurrency(candidate.totalAmount)
-            : '—'}{' '}
+            ? fmtCurrency(candidate.totalAmount) + ' TTC'
+            : '—'}
+          {candidate.subtotalAmount != null && candidate.totalAmount != null && (
+            <> · {fmtCurrency(candidate.subtotalAmount)} HT</>
+          )}{' '}
           ·{' '}
           {candidate.attachableCount === 0
             ? t('resolver.no_attachment')

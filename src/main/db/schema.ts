@@ -136,6 +136,11 @@ CREATE TABLE IF NOT EXISTS run_row_candidates (
   vendor_name TEXT,
   txn_date TEXT,
   total_amount REAL,
+  -- Pre-tax (HT) total derived from QBO's TxnTaxDetail.TotalTax. Null
+  -- when the txn has no tax detail (Purchase entries from credit cards
+  -- often don't). Persisted so the resolver can display both HT and TTC
+  -- without re-fetching from QBO.
+  subtotal_amount REAL,
   doc_number TEXT,
   attachable_count INTEGER NOT NULL DEFAULT 0,
   attachable_kinds TEXT NOT NULL DEFAULT '[]',
@@ -144,7 +149,7 @@ CREATE TABLE IF NOT EXISTS run_row_candidates (
 CREATE INDEX IF NOT EXISTS idx_candidates_row ON run_row_candidates(run_row_id);
 `;
 
-export const CURRENT_VERSION = 6;
+export const CURRENT_VERSION = 7;
 
 // Per-version migrations. Applied in order for any version < CURRENT_VERSION.
 // Each migration must be idempotent and self-contained (the "CREATE TABLE IF
@@ -291,6 +296,18 @@ export const MIGRATIONS: { to: number; sql: string }[] = [
         SELECT 1 FROM companies c
         WHERE c.project_id = p.id AND c.is_project_owner = 1
       );
+    `,
+  },
+  {
+    to: 7,
+    // v7: persist HT (subtotal) alongside TTC (total) on candidates so the
+    // resolver can show both. Engine matchers compare against both —
+    // budget conventions vary (some sheets are HT, others TTC) and
+    // QBO always returns TotalAmt as TTC, so a single-axis match misses
+    // half of all candidates the moment your budget convention diverges
+    // from QBO's.
+    sql: `
+      ALTER TABLE run_row_candidates ADD COLUMN subtotal_amount REAL;
     `,
   },
 ];

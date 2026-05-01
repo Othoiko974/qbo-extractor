@@ -741,6 +741,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
       vendorName: r.vendor_name,
       txnDate: r.txn_date,
       totalAmount: r.total_amount,
+      subtotalAmount: r.subtotal_amount,
       docNumber: r.doc_number,
       attachableCount: r.attachable_count,
       attachableKinds: safeJsonArray(r.attachable_kinds),
@@ -982,6 +983,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
         vendorName: string | null;
         txnDate: string | null;
         totalAmount: number | null;
+        subtotalAmount: number | null;
         docNumber: string | null;
         attachableCount: number;
         attachableKinds: string[];
@@ -1017,6 +1019,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null) {
               vendorName: e.hit._partyName ?? null,
               txnDate: e.hit.TxnDate ?? null,
               totalAmount: typeof e.hit.TotalAmt === 'number' ? e.hit.TotalAmt : null,
+              subtotalAmount: typeof e.hit._subtotalAmount === 'number' ? e.hit._subtotalAmount : null,
               docNumber: e.hit.DocNumber ?? null,
               attachableCount: e.count,
               attachableKinds: e.kinds,

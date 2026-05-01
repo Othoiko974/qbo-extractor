@@ -112,6 +112,8 @@ export type RunRowCandidate = {
   vendorName: string | null;
   txnDate: string | null;
   totalAmount: number | null;
+  // HT (pre-tax). Null when QBO didn't surface a tax breakdown.
+  subtotalAmount: number | null;
   docNumber: string | null;
   attachableCount: number;
   attachableKinds: string[];
@@ -130,6 +132,7 @@ export type SisterCandidate = {
   vendorName: string | null;
   txnDate: string | null;
   totalAmount: number | null;
+  subtotalAmount: number | null;
   docNumber: string | null;
   attachableCount: number;
   attachableKinds: string[];
