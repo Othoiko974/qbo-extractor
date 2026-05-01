@@ -5,7 +5,8 @@ import { t, useLang } from '../../i18n';
 import type { Company, Project } from '../../types/domain';
 
 const NAMING_VARS: { key: string; desc: string }[] = [
-  { key: '{num}', desc: 'N° de facture' },
+  { key: '{num}', desc: 'N° de facture (tel que QBO le retourne)' },
+  { key: '{num_bare}', desc: 'N° de facture sans le préfixe « F- »' },
   { key: '{fournisseur}', desc: 'Fournisseur (sanitisé)' },
   { key: '{date}', desc: 'Date YYYY-MM-DD' },
   { key: '{montant}', desc: 'Montant (ex : 350,10)' },
@@ -90,10 +91,13 @@ export function Settings() {
   // generic placeholder when there are no companies yet (fresh install).
   const previewCompany = companies[0]?.label ?? 'Compagnie';
 
-  // Live preview with sample data.
+  // Live preview with sample data. The sample doc number includes the
+  // F- prefix so the user can see how {num} and {num_bare} differ at
+  // a glance: {num} → "F-89108", {num_bare} → "89108".
   const nameSample = useMemo(() => {
     return preview(template, {
-      num: '89108',
+      num: 'F-89108',
+      num_bare: '89108',
       fournisseur: 'Home_Depot',
       date: '2025-09-24',
       montant: '350,10',

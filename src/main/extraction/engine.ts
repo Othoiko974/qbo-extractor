@@ -561,8 +561,18 @@ export class ExtractionEngine {
     // intuition when scanning a folder of extracts.
     const txnAmount = typeof txn.TotalAmt === 'number' ? txn.TotalAmt : row.amount;
     const txnDate = txn.TxnDate || row.date;
+    // Use the QBO transaction's DocNumber for the file name when QBO
+    // returned one — same logic as TotalAmt / TxnDate above. The
+    // budget's row.docNumber may carry an "F-" prefix that's a local
+    // bookkeeping convention (the engine's variant search already
+    // matches both forms server-side), so users with templates like
+    // "F-{num}_..." were getting "F-F-463" in their filenames. QBO's
+    // DocNumber is the authoritative invoice ID; falling back to
+    // row.docNumber keeps the previous behavior when QBO's response
+    // somehow lacks one.
+    const txnDocNumber = txn.DocNumber?.trim() || row.docNumber;
     const base = applyTemplate(template, {
-      num: row.docNumber,
+      num: txnDocNumber,
       fournisseur: row.vendor,
       date: txnDate,
       montant: txnAmount,

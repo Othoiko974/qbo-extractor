@@ -1,5 +1,10 @@
-// Template vars: {num} {fournisseur} {date} {montant} {batiment} {sheet}
+// Template vars: {num} {num_bare} {fournisseur} {date} {montant} {batiment} {sheet}
 // Also supports legacy ${montant} form (dollar-prefixed) used in default settings.
+//
+// {num_bare} = {num} with a leading "F-" stripped. Useful when the user's
+// template wraps the number with their own "F-" prefix (e.g.
+// "F-{num_bare}_...") and QBO already stores the bare digits — without
+// the bare token they'd end up with double-F filenames.
 
 export type NamingVars = {
   num: string;
@@ -39,8 +44,10 @@ function fmtAmount(n: number): string {
 }
 
 export function applyTemplate(template: string, vars: NamingVars): string {
+  const num = sanitize(vars.num);
   const map: Record<string, string> = {
-    num: sanitize(vars.num),
+    num,
+    num_bare: num.replace(/^F-/i, ''),
     fournisseur: sanitize(vars.fournisseur),
     date: sanitize(vars.date || ''),
     montant: fmtAmount(vars.montant),
