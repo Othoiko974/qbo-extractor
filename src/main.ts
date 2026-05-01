@@ -132,6 +132,29 @@ app.on('ready', () => {
       return new Response(String(err), { status: 500 });
     }
   });
+  // Auto-heal: if a company has a paired proxy API key but the
+  // per-company `qbo_proxy_enabled:{key}` setting is missing (paired on
+  // an older build that wrote the now-dead global toggle), turn proxy
+  // mode ON for that company. Otherwise the engine silently falls
+  // through to local OAuth and reports nothing because no user-visible
+  // error fires when the local token is just stale.
+  void (async () => {
+    try {
+      const { Companies, Settings } = await import('./main/db/repo');
+      const { Secrets } = await import('./main/secrets');
+      for (const c of Companies.list()) {
+        if (Settings.get(`qbo_proxy_enabled:${c.key}`) !== undefined) continue;
+        const apiKey = await Secrets.getQboProxyApiKey(c.key);
+        if (apiKey) {
+          Settings.set(`qbo_proxy_enabled:${c.key}`, '1');
+          console.log(`[startup] auto-enabled proxy mode for ${c.label} (had API key, no toggle)`);
+        }
+      }
+    } catch (err) {
+      console.error('[startup] proxy auto-heal failed', err);
+    }
+  })();
+
   registerIpcHandlers(() => mainWindow);
   createWindow();
 });
