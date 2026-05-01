@@ -763,14 +763,16 @@ function extKind(fileName: string | undefined, contentType: string | undefined):
 }
 
 function sanitizeFolder(s: string): string {
-  // Trailing dot/space is silently dropped by win32 — strip it ourselves
-  // so a label like "Altitude 233 Inc." doesn't desync the mkdir target
-  // ("Altitude 233 Inc") from later path.join lookups (still with the dot).
-  return s
+  // POSIX (macOS / Linux) preserves trailing dots and spaces. Win32
+  // silently drops them, which would desync the mkdir target ("Altitude
+  // 233 Inc") from later path.join lookups (still with the dot) — strip
+  // there only.
+  let out = s
     .replace(/[\\/:*?"<>|\n\r\t]/g, '_')
     .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/[. ]+$/, '');
+    .trim();
+  if (process.platform === 'win32') out = out.replace(/[. ]+$/, '');
+  return out;
 }
 
 // Build the list of invoice-number candidates to query QBO with. The primary is
